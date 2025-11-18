@@ -1,0 +1,21 @@
+# SousVide Conda Environment
+# This environment extends the FiGS environment with SousVide-specific dependencies
+# Install FiGS first, then activate the FiGS environment and run:
+# conda env update -f environment_sousvide.yml -n FiGS
+name: FiGS
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - tqdm
+  - tabulate
+  - conda-forge::colmap
+  - conda-forge::captum
+  - pip
+  - pip:
+    - git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+    - nerfstudio==1.1.4
+    - pyrealsense2
+    - -e .
+variables:
+  PYTHONNOUSERSITE: "1"

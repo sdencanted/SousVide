@@ -1,37 +1,42 @@
 # SOUS VIDE
 
 ## Installation
-1) Clone repository and load the submodules.
+
+### Prerequisites: Install FiGS First
+SousVide depends on FiGS. Install FiGS in a conda environment first:
+
+1) Clone and set up FiGS:
+```bash
+git clone https://github.com/StanfordMSL/FiGS-Standalone.git
+cd FiGS-Standalone
+conda env create -f environment.yml
+conda activate FiGS
+git submodule update --init --recursive
+pip install -e .
 ```
+
+### Install SousVide
+2) Clone SousVide repository (no submodules needed):
+```bash
+# From parent directory
+cd ..
 git clone https://github.com/StanfordMSL/SousVide.git
-git submodule update --recursive --init
+cd SousVide
 ```
-2) Build ACADOS locally.
-```
-# Navigate to acados folder
-cd <repository-path>/SousVide/FiGS/acados/
 
-# Compile
-mkdir -p build
-cd build
-cmake -DACADOS_WITH_QPOASES=ON ..
-make install -j4
+3) Update the FiGS conda environment with SousVide dependencies:
+```bash
+conda activate FiGS
+conda env update -f environment_sousvide.yml
+```
 
-# Add acados paths to bashrc
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"<acados_root>/lib"
-export ACADOS_SOURCE_DIR="<acados_root>"
+4) Install SousVide:
+```bash
+pip install -e .
 ```
-3) Set up conda environment (in the main directory)
-```
-# Navigate to environment config location
-cd <repository-path>/SousVide/
 
-# Create and activate
-conda env create -f environment_x86.yml
-conda activate kitchen
-```
-5) Download Example GSplats
-```
+5) Download Example GSplats (optional):
+```bash
 # Navigate to gsplats parent folder
 cd <repository-path>/SousVide/
 

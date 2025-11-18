@@ -11,20 +11,11 @@ license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
-    "scipy",
-    "qpsolvers",
-    "albumentations",
-    "imageio[ffmpeg]",
-    "ninja",
-    "gdown",
-    "ipykernel",
-    "ipympl",
-    "matplotlib",
-    "cython",
-    "torch",
-    "torchvision",
-    "nerfstudio",
+    "figs",
+    "tqdm",
+    "tabulate",
+    "captum",
+    "pyrealsense2",
 ]
 
 [tool.setuptools.packages.find]
