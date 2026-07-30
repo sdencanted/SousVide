@@ -9,3 +9,10 @@ temp/
 **/rollout_data/
 **/test_data/
 **/pretrained_models/
+build/
+.roo/
+
+# Local UV tooling and virtual environment (recreated from requirements.txt).
+.tools/
+.venv/
+

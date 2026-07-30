@@ -42,7 +42,7 @@ def plot_rollout_data(cohort:str,Nsamples:int=50,
 
         Ndata = 0
         for traj_file_path in traj_file_paths:
-            trajectories = torch.load(traj_file_path)
+            trajectories = torch.load(traj_file_path,weights_only=False)
 
             for trajectory in trajectories:
                 Ndata += trajectory["Ndata"]
@@ -55,7 +55,7 @@ def plot_rollout_data(cohort:str,Nsamples:int=50,
             # Load a random trajectory file
             traj_file = np.random.choice(traj_files)
             traj_file_path = os.path.join(traj_folder_path, traj_file)
-            trajectories = torch.load(traj_file_path)
+            trajectories = torch.load(traj_file_path,weights_only=False)
             
             # Trim the number of samples
             if Nsamples > len(trajectories):

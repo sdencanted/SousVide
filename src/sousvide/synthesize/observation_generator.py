@@ -86,8 +86,8 @@ def generate_observation_data(cohort:str,roster:list[str],
                 # Generate Observation Data
                 for idx_ds,(traj_data_file,imgs_data_file) in enumerate(zip(traj_data_files,imgs_data_files)):
                     # Load the Data
-                    traj_ds = torch.load(os.path.join(traj_data_folder,traj_data_file))
-                    imgs_ds = torch.load(os.path.join(imgs_data_folder,imgs_data_file))
+                    traj_ds = torch.load(os.path.join(traj_data_folder,traj_data_file),weights_only=False)
+                    imgs_ds = torch.load(os.path.join(imgs_data_folder,imgs_data_file),weights_only=False)
 
                     # Reset the observations progress bar
                     progress.reset(obsv_task,description=obsv_desc1,total=len(traj_ds))

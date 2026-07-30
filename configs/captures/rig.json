@@ -1,0 +1,19 @@
+{
+    "camera": null,
+    "extractor": {
+        "num_images": 0,
+        "num_marked": -1,
+        "marker_length": 0.17876,
+        "marker_id": 24
+    },
+    "reconstruction": {
+        "mode": "rig",
+        "camera_type": "pinhole",
+        "sfm_tool": "colmap",
+        "matching_method": "sequential",
+        "num_downscales": 0,
+        "gpu": true,
+        "matcher_type": "any",
+        "feature_type": "any"
+    }
+}

@@ -37,7 +37,7 @@ def plot_losses(cohort_name:str, roster:List[str], network_name:str,
         student_path = os.path.join(cohort_path, "roster", student)
         losses_path = os.path.join(student_path, f"losses_{network_name}.pt")
         if os.path.exists(losses_path):
-            losses: dict = torch.load(losses_path)
+            losses: dict = torch.load(losses_path,weights_only=False)
         else:
             student_summary = (
                 f"{'-' * Nln}\n"
@@ -165,7 +165,7 @@ def plot_deployments(cohort_name: str, course_name: str, roster: List[str], plot
         # Load the deployment data
         try:
             deployment_path = os.path.join(deployment_folder,"sim_"+course_name+"_"+pilot+".pt")
-            Trajectories = torch.load(deployment_path)
+            Trajectories = torch.load(deployment_path,weights_only=False)
             
             # Get pilot metrics
             metrics = fh.compute_flight_metrics(Trajectories)

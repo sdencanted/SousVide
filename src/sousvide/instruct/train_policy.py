@@ -86,7 +86,7 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
 
     # Load loss log if it exists
     if os.path.exists(losses_path):
-        prev_losses_log = torch.load(losses_path)
+        prev_losses_log = torch.load(losses_path,weights_only=False)
     else:
         prev_losses_log = {}
 
@@ -232,7 +232,7 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
         ckpt_path = os.path.join(ckpts_path,best_ckpt+".pt")
 
         # Load the best checkpoint
-        best_network = torch.load(ckpt_path)
+        best_network = torch.load(ckpt_path,weights_only=False)
 
         # Save the best network
         network_path = os.path.join(student_path,network_name+".pt")

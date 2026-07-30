@@ -1,0 +1,2 @@
+# Installed after requirements.txt so PyTorch is available to the extension build.
+tinycudann @ git+https://github.com/NVlabs/tiny-cuda-nn.git#subdirectory=bindings/torch

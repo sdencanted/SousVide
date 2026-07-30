@@ -1,0 +1,3 @@
+# Resolved from requirements.tinycudann.in on 2026-07-27.
+# Kept separate so it is installed only after Torch is present.
+tinycudann @ git+https://github.com/NVlabs/tiny-cuda-nn.git@749dd70c5afc5a9dadb85e5652ed65d55e0ba187#subdirectory=bindings/torch

@@ -38,7 +38,7 @@ def generate_network(
 
     # If the network already exists, load it. Otherwise, create it.
     if os.path.isfile(network_path):
-        network = torch.load(network_path)
+        network = torch.load(network_path,weights_only=False)
     else:
         # Simple Networks
         if network_type == "simple":

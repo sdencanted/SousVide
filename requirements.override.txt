@@ -1,0 +1,2 @@
+# Mirrors [pypi-options.dependency-overrides] in pixi.toml.
+viser>=1.0.24

@@ -1,6 +1,3 @@
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
 
 [project]
 name = "sousvide"
@@ -11,21 +8,9 @@ license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
-    "scipy",
-    "qpsolvers",
-    "albumentations",
-    "imageio[ffmpeg]",
-    "ninja",
-    "gdown",
-    "ipykernel",
-    "ipympl",
-    "matplotlib",
-    "cython",
-    "torch",
-    "torchvision",
-    "nerfstudio",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+#colmap installed with CMAKE_ARGS="-DCOLMAP_DIR=/home/airlab/colmap/build -DCMAKE_CUDA_ARCHITECTURES=120"  LDFLAGS="-Wl,-rpath,${CONDA_PREFIX}/lib -L${CONDA_PREFIX}/lib" pixi run pip install ~/colmap/
