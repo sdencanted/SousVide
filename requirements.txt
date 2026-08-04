@@ -9,11 +9,11 @@
     # via -r requirements.in
 -e ./FiGS/acados/interfaces/acados_template
     # via -r requirements.in
--e /home/airlab/nerfstudio
+-e ./FiGS/nerfstudio
     # via
     #   -r requirements.in
     #   figs
--e /home/airlab/nerfstudio/third_party/Hierarchical-Localization
+-e ./FiGS/nerfstudio/third_party/Hierarchical-Localization
     # via
     #   -r requirements.in
     #   figs
