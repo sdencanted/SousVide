@@ -284,9 +284,12 @@ def save_rollouts(cohort_name:str,course_name:str,
     traj_path = os.path.join(traj_course_path,"trajectories"+dset_name+".pt")
     imgs_path = os.path.join(imgs_course_path,"images"+dset_name+".pt")
 
+    assert all(isinstance(x["rgb"], np.ndarray) for x in Images)
+    assert all(isinstance(x["depth"], np.ndarray) for x in Images)
     if use_compress:
         Images = dch.compress_data(Images)
-
-    torch.save(Trajectories,traj_path)
-    torch.save(Images,imgs_path)
+    # Protocol 4 represents binary image buffers as bytes rather than text.
+    # This avoids UTF-8 decoding failures for pixel values above 0x7f.
+    torch.save(Trajectories, traj_path, pickle_protocol=4)
+    torch.save(Images, imgs_path, pickle_protocol=4)
 
