@@ -7,74 +7,58 @@ import numpy as np
 from PIL import Image
 from io import BytesIO
 
-def decompress_data(image_dict:dict[str,str|np.ndarray]) -> dict[str,str|np.ndarray]:
+
+def decompress_data(
+    image_dict:dict[str,str|np.ndarray],key:str="rgb"
+) -> dict[str,str|np.ndarray]:
     """
-    We apply a compression if the images are too large to be saved in the .pt file. This function
-    decompresses the images back to their original form.
+    Decompress PNG frames back to their original RGB or grayscale arrays.
 
     Args:
         image_dict:    Dictionary containing image data.
+        key:           Image modality key to decompress.
 
     Returns:
         image_dict:    Dictionary with decompressed images.
     """
+    assert key in image_dict, f"No {key} images found in data dictionary"
+    frames = image_dict[key]
+    if len(frames) == 0:
+        return image_dict
 
-    # Check if the image_dict has the key 'images' and if it is not empty
-    assert 'rgb' in image_dict, "No images found in data dictionary"
-    
-    # Check if the image are processed or not. We do this by checking the array
-    # order. If the order is (N, C, H, W) then the images are processed. If the
-    # order is (N, H, W, C) then the images are unprocessed. We only compress if
-    # the images are processed.
-    if type(image_dict['rgb'][0]) == bytes:
-        prc_imgs = image_dict['rgb']
+    if isinstance(frames[0],bytes):
         raw_imgs = []
-        for frame_idx in range(len(prc_imgs)):
-            # Process each image here
-            imgpil = Image.open(BytesIO(prc_imgs[frame_idx]))
-            raw_imgs.append(np.array(imgpil))
-
-        image_dict['rgb'] = np.stack(raw_imgs,axis=0)
-    else:
-        pass
+        for frame in frames:
+            with Image.open(BytesIO(frame)) as image:
+                raw_imgs.append(np.array(image))
+        image_dict[key] = np.stack(raw_imgs,axis=0)
 
     return image_dict
 
-def compress_data(Images):
+
+def compress_data(Images,key:str="rgb"):
     """
-    We apply a compression if the images are too large to be saved in the .pt file. This function
-    compresses the images to a smaller size.
+    Compress RGB ``(N,H,W,3)`` or grayscale ``(N,H,W)`` uint8 frames as PNG.
 
     Args:
         Images:    List of dictionaries containing image data.
+        key:       Image modality key to compress.
 
     Returns:
         Images:    List of dictionaries with compressed images.
     """
-
-    # Check if the Images list is not empty and contains dictionaries with 'images' key
-    assert 'rgb' in Images[0], "No images found in data dictionary"
+    if not Images:
+        return Images
+    assert all(key in item for item in Images), f"No {key} images found in data dictionary"
 
     for image_dict in Images:
-        # Check if the image are processed or not. We do this by checking the array
-        # order. If the order is (N, C, H, W) then the images are processed. If the
-        # order is (N, H, W, C) then the images are unprocessed. We only compress if
-        # the images are processed.
-
-        if image_dict['rgb'].shape[-1] == 3:
-            raw_imgs = image_dict['rgb']
-            prc_imgs = []
-            for frame_idx in range(raw_imgs.shape[0]):
-                img_arr = raw_imgs[frame_idx]
-                imgpil = Image.fromarray(img_arr)
-
+        raw_imgs = image_dict[key]
+        if isinstance(raw_imgs,np.ndarray):
+            compressed = []
+            for image_array in raw_imgs:
                 buffer = BytesIO()
-                imgpil.save(buffer, format='PNG')   
-                buffer.seek(0)
-                prc_imgs.append(buffer.getvalue())
+                Image.fromarray(image_array).save(buffer,format="PNG")
+                compressed.append(buffer.getvalue())
+            image_dict[key] = compressed
 
-            image_dict['rgb'] = prc_imgs
-        else:
-            pass
-    
     return Images

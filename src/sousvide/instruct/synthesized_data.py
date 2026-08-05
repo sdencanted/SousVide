@@ -2,6 +2,8 @@ import os
 import torch
 from torch.utils.data import Dataset
 from typing import Any
+from sousvide.synthesize.image_modality import (
+    ImageModality,validate_image_modality)
 
 class ObservationData(Dataset):
     def __init__(self,
@@ -66,7 +68,8 @@ def generate_dataset(data_path:str,device:torch.device) -> Dataset:
 def get_data_paths(cohort_name:str,
                    student_name:str,
                    topic_name:str,
-                   course_name:str|None=None
+                   course_name:str|None=None,
+                   image_modality:ImageModality="rgb"
                    ) -> tuple[list[str],str]:
     """
     Get the paths to the observation data files for training or testing. If mode is 'train',
@@ -85,10 +88,14 @@ def get_data_paths(cohort_name:str,
     """
 
     # Some useful path(s)
+    image_modality = validate_image_modality(image_modality)
     workspace_path = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    topic_data_path = os.path.join(
-        workspace_path,"cohorts",cohort_name,"observation_data",student_name,topic_name)
+    topic_parts = [workspace_path,"cohorts",cohort_name,"observation_data",student_name]
+    if image_modality == "kronecker_delta":
+        topic_parts.append(image_modality)
+    topic_parts.append(topic_name)
+    topic_data_path = os.path.join(*topic_parts)
 
     # Get course paths
     if course_name is None:

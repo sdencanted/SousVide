@@ -39,7 +39,8 @@ def get_training_progress() -> Progress:
         TextColumn("{task.description} | [bold dark_green]Loss[/]: [dark_green]{task.fields[loss]:.4f}[/]"),
         BarColumn(),
         TextColumn("[bold green3] {task.completed:>2}/{task.total} {task.fields[units]}"),
-        TimeRemainingColumn(elapsed_when_finished=True),
+        TextColumn("[bold cyan]ETA[/]: [cyan]{task.fields[eta]}[/]"),
+        TextColumn("[cyan]({task.fields[remaining]} remaining)[/]"),
         console=console,
         auto_refresh=False,
     )

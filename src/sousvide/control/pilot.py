@@ -9,10 +9,13 @@ from typing import Literal
 from figs.control.base_controller import BaseController
 from albumentations.pytorch import ToTensorV2
 from sousvide.control.policy import Policy
+from sousvide.synthesize.image_modality import ImageModality,validate_image_modality
 
 class Pilot(BaseController):
     def __init__(self,cohort_name:str,pilot_name:str,
-                 hz:int=20,Ntxu:int=15,Nft:int=6):
+                 hz:int=20,Ntxu:int=15,Nft:int=6,
+                 image_modality:ImageModality="rgb",
+                 require_commnet_weights:bool=False):
         """
         Initializes a pilot object. 
         
@@ -22,6 +25,8 @@ class Pilot(BaseController):
             hz:             Frequency of the pilot.
             Ntxu:           Number of time/state/input variables.
             Nft:            Number of force/torque variables.
+            image_modality: Image modality selecting the commNet weights.
+            require_commnet_weights: Require trained modality-specific commNet weights.
         
         Variables:
             path:           Path to the pilot's directory.
@@ -57,10 +62,13 @@ class Pilot(BaseController):
             os.makedirs(pilot_path, exist_ok=True)
             
         # Initialize pytorch variables
+        image_modality = validate_image_modality(image_modality)
         profile = ch.get_config(pilot_name,"pilots")
         
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        policy = Policy(profile,pilot_name,pilot_path).to(device)
+        policy = Policy(
+            profile,pilot_name,pilot_path,image_modality=image_modality,
+            require_commnet_weights=require_commnet_weights).to(device)
 
         # Initialize sequence variables
         Nsqc = policy.Nhy
@@ -89,6 +97,7 @@ class Pilot(BaseController):
         # Neural Network Variables
         self.device = device
         self.policy = policy
+        self.image_modality = image_modality
 
         # Image Processing Variables
         self.process_image = process_image
