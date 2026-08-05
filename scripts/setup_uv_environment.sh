@@ -10,13 +10,13 @@ if [[ -x "$repo_root/.tools/uv/uv" ]]; then
 fi
 
 "$uv_bin" venv --python 3.10 "$repo_root/.venv"
-"$uv_bin" pip sync --python "$repo_root/.venv/bin/python" "$repo_root/requirements.txt"
+"$uv_bin" pip sync --python "$repo_root/.venv/bin/python" "$repo_root/requirements.txt" --config-setting editable=compat
 
-# FiGS relies on its vendored Nerfstudio, Hierarchical-Localization, and v2e checkouts.
-"$uv_bin" pip install --python "$repo_root/.venv/bin/python" \
-    "$repo_root/FiGS/nerfstudio" \
-    "$repo_root/FiGS/nerfstudio/third_party/Hierarchical-Localization" \
-    "$repo_root/FiGS/v2e"
+# # FiGS relies on its vendored Nerfstudio, Hierarchical-Localization, and v2e checkouts.
+# "$uv_bin" pip install --python "$repo_root/.venv/bin/python" -e \
+#     "$repo_root/FiGS/nerfstudio" \
+#     "$repo_root/FiGS/nerfstudio/third_party/Hierarchical-Localization" \
+#     "$repo_root/FiGS/v2e"
 
 # tiny-cuda-nn must build against the Torch that the first sync installed.
 "$uv_bin" pip install --python "$repo_root/.venv/bin/python" \

@@ -9,6 +9,10 @@
     # via -r requirements.in
 -e ./FiGS/acados/interfaces/acados_template
     # via -r requirements.in
+-e ./FiGS/v2e
+    # via
+    #   -r requirements.in
+    #   figs
 -e ./FiGS/nerfstudio
     # via
     #   -r requirements.in
