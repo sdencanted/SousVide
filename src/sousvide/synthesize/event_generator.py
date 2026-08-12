@@ -39,7 +39,7 @@ def events_to_kronecker(
         return image
 
     event_min = max(0.0, float(nonzero.min()) - 1.0)
-    scale = 255.0 / max(1.0, float(np.percentile(nonzero, 90)) - event_min)
+    scale = 255.0 / max(1.0, float(np.percentile(nonzero, 98)) - event_min)
     return np.clip(counts.astype(np.float32) * scale, 0, 255).astype(np.uint8)
 
 

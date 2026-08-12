@@ -40,6 +40,8 @@ anyio==4.14.2
     #   jupyter-server
 appdirs==1.4.4
     # via nerfstudio
+argcomplete==3.7.2
+    # via v2e
 argon2-cffi==25.1.0
     # via jupyter-server
 argon2-cffi-bindings==25.1.0
@@ -145,6 +147,12 @@ docstring-parser==0.18.0
     # via tyro
 dulwich==0.24.1
     # via comet-ml
+dv-processing==2.0.4
+    # via v2e
+easygui==0.98.3
+    # via v2e
+engineering-notation==0.10.0
+    # via v2e
 everett==3.1.0
     # via comet-ml
 exceptiongroup==1.3.1
@@ -201,6 +209,7 @@ h5py==3.16.0
     #   hdf5plugin
     #   hloc
     #   nerfstudio
+    #   v2e
 hdf5plugin==6.0.0
     # via -r requirements.in
 hf-xet==1.5.2
@@ -380,6 +389,7 @@ matplotlib==3.10.9
     #   open3d
     #   seaborn
     #   ultralytics
+    #   v2e
 matplotlib-inline==0.2.2
     # via
     #   ipykernel
@@ -439,7 +449,9 @@ notebook-shim==0.2.4
     #   jupyterlab
     #   notebook
 numba==0.63.1
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   v2e
 numpy==2.2.6
     # via
     #   acados-template
@@ -493,6 +505,7 @@ numpy==2.2.6
     #   ultralytics
     #   ultralytics-thop
     #   unfoldnd
+    #   v2e
     #   viser
 nuscenes-devkit==1.1.9
     # via nerfstudio
@@ -547,6 +560,7 @@ opencv-python==5.0.0.93
     #   lightglue
     #   nuscenes-devkit
     #   ultralytics
+    #   v2e
 opencv-python-headless==4.10.0.84
     # via
     #   albucore
@@ -614,6 +628,8 @@ plotly==6.9.0
     #   dash
     #   hloc
     #   nerfstudio
+plyer==2.1.0
+    # via v2e
 polars==1.43.1
     # via ultralytics
 polars-runtime-32==1.43.1
@@ -770,7 +786,9 @@ rpds-py==0.30.0
 safetensors==0.8.0
     # via transformers
 scikit-image==0.25.2
-    # via nerfstudio
+    # via
+    #   nerfstudio
+    #   v2e
 scikit-learn==1.7.2
     # via
     #   nuscenes-devkit
@@ -794,6 +812,8 @@ scipy==1.15.3
     #   tensorly
     #   torch-fidelity
     #   torchmetrics
+screeninfo==0.8.1
+    # via v2e
 scs==3.2.11
     # via cvxpy
 seaborn==0.13.2
@@ -883,6 +903,7 @@ torch==2.13.0+cu132
     #   ultralytics
     #   ultralytics-thop
     #   unfoldnd
+    #   v2e
 torch-fidelity==0.3.0
     # via torchmetrics
 torchmetrics==1.0.3
@@ -899,6 +920,7 @@ torchvision==0.28.0+cu132
     #   torch-fidelity
     #   torchmetrics
     #   ultralytics
+    #   v2e
 tornado==6.5.7
     # via
     #   ipykernel
@@ -918,6 +940,7 @@ tqdm==4.66.5
     #   open3d
     #   torch-fidelity
     #   transformers
+    #   v2e
     #   viser
 traitlets==5.15.1
     # via
