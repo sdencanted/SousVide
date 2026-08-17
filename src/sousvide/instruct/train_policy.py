@@ -21,7 +21,7 @@ from sousvide.control.pilot import Pilot
 from sousvide.control.policy import Policy
 from sousvide.instruct.losses import LossFn
 from sousvide.instruct.synthesized_data import (
-    generate_grouped_dataset,get_data_paths)
+    generate_dataset,generate_grouped_dataset,get_data_paths)
 from sousvide.synthesize.image_modality import (
     ImageModality,validate_image_modality)
 
@@ -29,6 +29,7 @@ from sousvide.synthesize.image_modality import (
 CompileMode = Literal["none","default","reduce-overhead"]
 Precision = Literal["float32","bfloat16"]
 RegenMode = bool|Literal["missing"]
+NumericalMode = Literal["modern","original"]
 
 
 def _validate_dataloader_num_workers(dataloader_num_workers:int) -> None:
@@ -47,6 +48,39 @@ def _validate_runtime_options(
         raise ValueError("precision must be 'float32' or 'bfloat16'.")
     if regen not in (True,False,"missing"):
         raise ValueError("regen must be True, False, or 'missing'.")
+
+
+def _validate_numerical_mode_options(
+        network_name:str,numerical_mode:str,regen:bool|str,
+        deployment:None|tuple[str,str,str],image_modality:str,
+        compile_mode:str,precision:str,persistent_dataloader:bool,
+        seed:int) -> None:
+    if numerical_mode not in ("modern","original"):
+        raise ValueError("numerical_mode must be 'modern' or 'original'.")
+    if numerical_mode == "modern":
+        return
+
+    conflicts = []
+    if network_name != "histNet":
+        conflicts.append("network_name must be 'histNet'")
+    if regen is not False:
+        conflicts.append("regen must be False")
+    if deployment is not None:
+        conflicts.append("deployment must be None")
+    if image_modality != "rgb":
+        conflicts.append("image_modality must be 'rgb'")
+    if compile_mode != "none":
+        conflicts.append("compile_mode must be 'none'")
+    if precision != "float32":
+        conflicts.append("precision must be 'float32'")
+    if persistent_dataloader:
+        conflicts.append("persistent_dataloader must be False")
+    if seed != 0:
+        conflicts.append(
+            "seed must remain 0; seed the ambient torch RNG before training")
+    if conflicts:
+        raise ValueError(
+            "original numerical mode requires: "+"; ".join(conflicts)+".")
 
 
 def _move_to_device(data,device:torch.device,non_blocking:bool=False):
@@ -276,10 +310,14 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
                  compile_mode:CompileMode="none",
                  precision:Precision="float32",
                  persistent_dataloader:bool=False,
-                 cuda_prefetch:bool=False,seed:int=0):
+                 cuda_prefetch:bool=False,seed:int=0,
+                 numerical_mode:NumericalMode="modern"):
     image_modality = validate_image_modality(image_modality)
     _validate_dataloader_num_workers(dataloader_num_workers)
     _validate_runtime_options(compile_mode,precision,regen)
+    _validate_numerical_mode_options(
+        network_name,numerical_mode,regen,deployment,image_modality,
+        compile_mode,precision,persistent_dataloader,seed)
 
     console = ru.get_console()
     progress = ru.get_training_progress()
@@ -317,6 +355,7 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
                 compile_mode=compile_mode,precision=precision,
                 persistent_dataloader=persistent_dataloader,
                 cuda_prefetch=cuda_prefetch,seed=seed,
+                numerical_mode=numerical_mode,
                 observation_generation_seconds=observation_generation_seconds)
             progress.refresh()
 
@@ -331,10 +370,14 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                   precision:Precision="float32",
                   persistent_dataloader:bool=False,
                   cuda_prefetch:bool=False,seed:int=0,
+                  numerical_mode:NumericalMode="modern",
                   observation_generation_seconds:float=0.0) -> None:
     image_modality = validate_image_modality(image_modality)
     _validate_dataloader_num_workers(dataloader_num_workers)
     _validate_runtime_options(compile_mode,precision,False)
+    _validate_numerical_mode_options(
+        network_name,numerical_mode,False,deployment,image_modality,
+        compile_mode,precision,persistent_dataloader,seed)
 
     start_time = time.time()
     use_cuda = torch.cuda.is_available()
@@ -394,28 +437,52 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
         setup_timings["initial_deployment_seconds"] = (
             time.perf_counter()-deployment_start)
         Eval_tte.append((0,metric[student_name]["TTE"]["mean"]))
+    if numerical_mode == "original":
+        # Match the legacy no-deployment loss-log layout.
+        Eval_tte = [[]]
 
     dataset_start = time.perf_counter()
     od_train_files,od_test_files = get_data_paths(
         cohort_name,student.name,network_name,
         image_modality=image_modality)
-    train_dataset,train_sampler = generate_grouped_dataset(
-        od_train_files,batch_size,True,seed=seed,mmap=True)
-    test_dataset,test_sampler = generate_grouped_dataset(
-        od_test_files,batch_size,False,seed=seed,mmap=True)
-    train_loader = _create_dataloader(
-        train_dataset,None,False,dataloader_num_workers,use_cuda,
-        batch_sampler=train_sampler,
-        persistent_workers=persistent_dataloader)
-    test_loader = _create_dataloader(
-        test_dataset,None,False,dataloader_num_workers,use_cuda,
-        batch_sampler=test_sampler,
-        persistent_workers=persistent_dataloader)
+    if numerical_mode == "original":
+        # Preserve the original file-local DataLoader iteration pattern. Each
+        # iterator consumes the same global RNG draws as the legacy loop, while
+        # the immutable datasets are mapped only once instead of every epoch.
+        train_loaders = [
+            _create_dataloader(
+                generate_dataset(path,mmap=True),batch_size,True,
+                dataloader_num_workers,use_cuda)
+            for path in od_train_files
+        ]
+        test_loaders = [
+            _create_dataloader(
+                generate_dataset(path,mmap=True),batch_size,True,
+                dataloader_num_workers,use_cuda)
+            for path in od_test_files
+        ]
+        train_sampler = None
+        train_loader = test_loader = None
+    else:
+        train_dataset,train_sampler = generate_grouped_dataset(
+            od_train_files,batch_size,True,seed=seed,mmap=True)
+        test_dataset,test_sampler = generate_grouped_dataset(
+            od_test_files,batch_size,False,seed=seed,mmap=True)
+        train_loader = _create_dataloader(
+            train_dataset,None,False,dataloader_num_workers,use_cuda,
+            batch_sampler=train_sampler,
+            persistent_workers=persistent_dataloader)
+        test_loader = _create_dataloader(
+            test_dataset,None,False,dataloader_num_workers,use_cuda,
+            batch_sampler=test_sampler,
+            persistent_workers=persistent_dataloader)
+        train_loaders = test_loaders = None
     setup_timings["dataset_initialization_seconds"] = (
         time.perf_counter()-dataset_start)
 
     loss_entry = {
         "network":network_name,"image_modality":image_modality,
+        "numerical_mode":numerical_mode,
         "compile_mode":compile_mode,"precision":precision,
         "batch_size":batch_size,
         "persistent_dataloader":persistent_dataloader,
@@ -429,56 +496,22 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
     epoch_durations = []
     for ep in range(Neps):
         epoch_start = time.perf_counter()
-        train_sampler.set_epoch(ep)
+        if numerical_mode == "modern":
+            train_sampler.set_epoch(ep)
         network.train()
         train_transfer = _new_phase_timings()
         train_compute_events = []
         train_compute_seconds = 0.0
         train_loss_sum = torch.zeros((),device=device)
+        original_train_losses = []
         Ndata_tn = 0
         train_phase_start = time.perf_counter()
 
-        for xnn,ylb in _device_batches(
-                train_loader,device,use_cuda,cuda_prefetch,train_transfer):
-            current_batch_size = _batch_length(ylb)
-            if use_cuda:
-                compute_start = torch.cuda.Event(enable_timing=True)
-                compute_end = torch.cuda.Event(enable_timing=True)
-                compute_start.record()
-            else:
-                compute_start_time = time.perf_counter()
-
-            opt.zero_grad(set_to_none=True)
-            with _autocast_context(device,precision):
-                ypd = training_network(xnn)
-            loss = criterion(_float_outputs(ypd),ylb)
-            loss.backward()
-            opt.step()
-
-            if use_cuda:
-                compute_end.record()
-                train_compute_events.append((compute_start,compute_end))
-            else:
-                train_compute_seconds += time.perf_counter()-compute_start_time
-            train_loss_sum += loss.detach()*current_batch_size
-            Ndata_tn += current_batch_size
-
-        if use_cuda:
-            train_compute_seconds = _compute_seconds(
-                train_compute_events,device)
-        train_total_seconds = time.perf_counter()-train_phase_start
-        epLoss_tn = (train_loss_sum/Ndata_tn).item()
-
-        network.eval()
-        test_transfer = _new_phase_timings()
-        test_compute_events = []
-        test_compute_seconds = 0.0
-        test_loss_sum = torch.zeros((),device=device)
-        Ndata_tt = 0
-        test_phase_start = time.perf_counter()
-        with torch.inference_mode():
+        active_train_loaders = (
+            train_loaders if numerical_mode == "original" else (train_loader,))
+        for active_loader in active_train_loaders:
             for xnn,ylb in _device_batches(
-                    test_loader,device,use_cuda,cuda_prefetch,test_transfer):
+                    active_loader,device,use_cuda,cuda_prefetch,train_transfer):
                 current_batch_size = _batch_length(ylb)
                 if use_cuda:
                     compute_start = torch.cuda.Event(enable_timing=True)
@@ -486,21 +519,86 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                     compute_start.record()
                 else:
                     compute_start_time = time.perf_counter()
+
+                if numerical_mode == "modern":
+                    opt.zero_grad(set_to_none=True)
                 with _autocast_context(device,precision):
                     ypd = training_network(xnn)
-                loss = criterion(_float_outputs(ypd),ylb)
+                loss = criterion(
+                    ypd if numerical_mode == "original"
+                    else _float_outputs(ypd),ylb)
+                loss.backward()
+                opt.step()
+                if numerical_mode == "original":
+                    opt.zero_grad()
+
                 if use_cuda:
                     compute_end.record()
-                    test_compute_events.append((compute_start,compute_end))
+                    train_compute_events.append((compute_start,compute_end))
                 else:
-                    test_compute_seconds += time.perf_counter()-compute_start_time
-                test_loss_sum += loss.detach()*current_batch_size
-                Ndata_tt += current_batch_size
+                    train_compute_seconds += time.perf_counter()-compute_start_time
+                if numerical_mode == "original":
+                    original_train_losses.append(batch_size*loss.item())
+                    Ndata_tn += batch_size
+                else:
+                    train_loss_sum += loss.detach()*current_batch_size
+                    Ndata_tn += current_batch_size
+
+        if use_cuda:
+            train_compute_seconds = _compute_seconds(
+                train_compute_events,device)
+        train_total_seconds = time.perf_counter()-train_phase_start
+        epLoss_tn = (
+            sum(original_train_losses)/Ndata_tn
+            if numerical_mode == "original"
+            else (train_loss_sum/Ndata_tn).item())
+
+        if numerical_mode == "modern":
+            network.eval()
+        test_transfer = _new_phase_timings()
+        test_compute_events = []
+        test_compute_seconds = 0.0
+        test_loss_sum = torch.zeros((),device=device)
+        original_test_losses = []
+        Ndata_tt = 0
+        test_phase_start = time.perf_counter()
+        with torch.inference_mode():
+            active_test_loaders = (
+                test_loaders if numerical_mode == "original" else (test_loader,))
+            for active_loader in active_test_loaders:
+                for xnn,ylb in _device_batches(
+                        active_loader,device,use_cuda,cuda_prefetch,test_transfer):
+                    current_batch_size = _batch_length(ylb)
+                    if use_cuda:
+                        compute_start = torch.cuda.Event(enable_timing=True)
+                        compute_end = torch.cuda.Event(enable_timing=True)
+                        compute_start.record()
+                    else:
+                        compute_start_time = time.perf_counter()
+                    with _autocast_context(device,precision):
+                        ypd = training_network(xnn)
+                    loss = criterion(
+                        ypd if numerical_mode == "original"
+                        else _float_outputs(ypd),ylb)
+                    if use_cuda:
+                        compute_end.record()
+                        test_compute_events.append((compute_start,compute_end))
+                    else:
+                        test_compute_seconds += time.perf_counter()-compute_start_time
+                    if numerical_mode == "original":
+                        original_test_losses.append(batch_size*loss.item())
+                        Ndata_tt += batch_size
+                    else:
+                        test_loss_sum += loss.detach()*current_batch_size
+                        Ndata_tt += current_batch_size
 
         if use_cuda:
             test_compute_seconds = _compute_seconds(test_compute_events,device)
         test_total_seconds = time.perf_counter()-test_phase_start
-        epLoss_tt = (test_loss_sum/Ndata_tt).item()
+        epLoss_tt = (
+            sum(original_test_losses)/Ndata_tt
+            if numerical_mode == "original"
+            else (test_loss_sum/Ndata_tt).item())
         network.train()
 
         Loss_tn.append((ep+1,epLoss_tn))
@@ -530,6 +628,8 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                 deployment_seconds = time.perf_counter()-deployment_start
                 Eval_tte.append(
                     (ep+1,metric[student_name]["TTE"]["mean"]))
+            elif numerical_mode == "original":
+                Eval_tte.append([])
 
         epoch_seconds = time.perf_counter()-epoch_start
         epoch_timing = {

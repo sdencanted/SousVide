@@ -43,7 +43,10 @@ eval_method = "eval_nominal"        # Evaluate over 10 trajectories, non-ideal f
 # # eval_method = "eval_extreme"        # Evaluate over 10 trajectories after putting the drone and pilot through a washing machine.
 
 # # Train the Policy
-tp.train_roster(cohort,roster,"histNet",200,dataloader_num_workers=8)
+tp.train_roster(
+    cohort,roster,"histNet",200,
+    dataloader_num_workers=8,cuda_prefetch=True,
+    numerical_mode="original")
 
 # # Plot the histNet losses
 # pl.plot_losses(cohort,roster,"histNet",use_log=True)
