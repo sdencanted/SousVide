@@ -231,8 +231,8 @@ def deploy_roster(cohort_name:str,
     table = ru.get_deployment_table()
 
     # Simulate samples across expert+roster
-    # crew = ["expert"]+roster
-    crew = roster
+    crew = ["expert"]+roster
+    # crew = roster
     
     # Initialize the simulator
     simulator = (

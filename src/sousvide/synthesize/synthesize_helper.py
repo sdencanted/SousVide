@@ -108,6 +108,9 @@ def generate_perturbations(Tsps:np.ndarray,
         idxr = np.where(tXUd[:,0] <= t0)[0][-1]
         x0[6:10] = oh.obedient_quaternion(x0[6:10],tXUd[idxr,7:11])
 
+        # assert that the norm is not 0
+        assert np.linalg.norm(x0[6:10]) > 0, "Quaternion norm is zero."
+
         # Store perturbation in list
         perturbation = {"t0":t0,"x0":x0}
         Perturbations.append(perturbation)

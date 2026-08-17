@@ -7,10 +7,48 @@ import torch
 from torch import nn
 
 import sousvide.control.network_factory as network_factory
+import sousvide.control.network_helper as network_helper
 from sousvide.control.policy import Policy
 
 
 class ModalityNetworkWeightTests(unittest.TestCase):
+    def test_collect_prediction_inputs_skips_final_target_forward(self):
+        class HistoryNetwork(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.io_idxs = {
+                    "xdp":network_helper.get_io_idxs(
+                        {"current":[["t"]]})}
+
+            def forward(self,inputs):
+                return {"feature_vector":inputs["current"]+1}
+
+        class CommandNetwork(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.io_idxs = {
+                    "xdp":network_helper.get_io_idxs(
+                        {"feature_vector":[1]})}
+                self.forward_called = False
+
+            def forward(self,inputs):
+                self.forward_called = True
+                return {"command":inputs["feature_vector"]}
+
+        policy = Policy.__new__(Policy)
+        nn.Module.__init__(policy)
+        command = CommandNetwork()
+        policy.networks = nn.ModuleDict({
+            "histNet":HistoryNetwork(),"commNet":command})
+
+        inputs = policy.collect_prediction_inputs(
+            {"current":torch.zeros(2,11)},["commNet"])
+
+        self.assertEqual(list(inputs),["commNet"])
+        torch.testing.assert_close(
+            inputs["commNet"]["feature_vector"],torch.ones(2,1))
+        self.assertFalse(command.forward_called)
+
     def test_commnet_has_separate_canonical_paths(self):
         pilot_path = os.path.join("cohorts","test","roster","Maverick")
         self.assertEqual(

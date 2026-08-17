@@ -13,17 +13,17 @@ import sousvide.flight.deploy_figs as df
 # Robustness Test
 # =========================================
 
-cohort = "robustness"               # Cohort name (parent folder) for the robustness test
-scene = "mid_gate"                  # Scene name for the robustness test
-courses = ["traverse"]              # Courses to be used in the robustness test
+# cohort = "robustness"               # Cohort name (parent folder) for the robustness test
+# scene = "mid_gate"                  # Scene name for the robustness test
+# courses = ["traverse"]              # Courses to be used in the robustness test
 
 # # =========================================
 # # Cluttered Test
 # # =========================================
 
-# cohort = "cluttered"               # Cohort name (parent folder) for the cluttered test
-# scene = "backroom"                  # Scene name for the cluttered test
-# courses = ["circuit"]              # Courses to be used in the cluttered test
+cohort = "cluttered"               # Cohort name (parent folder) for the cluttered test
+scene = "backroom"                  # Scene name for the cluttered test
+courses = ["circuit"]              # Courses to be used in the cluttered test
 
 # Pilot roster
 roster = [
@@ -42,27 +42,40 @@ eval_method = "eval_nominal"        # Evaluate over 10 trajectories, non-ideal f
 # eval_method = "eval_challenged"     # Evaluate over 10 trajectories, non-ideal frame and some noise.
 # # eval_method = "eval_extreme"        # Evaluate over 10 trajectories after putting the drone and pilot through a washing machine.
 
-# Train the Policy
-tp.train_roster(cohort,roster,"histNet",200)
+# # Train the Policy
+tp.train_roster(cohort,roster,"histNet",200,dataloader_num_workers=8)
 
-# Plot the histNet losses
-pl.plot_losses(cohort,roster,"histNet",use_log=True)
+# # Plot the histNet losses
+# pl.plot_losses(cohort,roster,"histNet",use_log=True)
 
-
-# Train the Policy
 tp.train_roster(
-    cohort,roster,"commNet",300,
-    regen=True,
-    deployment=(courses[0],scene,eval_method),image_modality="kronecker_delta",batch_size=256)
+    cohort,
+    roster,
+    "commNet",
+    300,
+    regen="missing",
+    image_modality="rgb",
+    batch_size=64,
+    dataloader_num_workers=8,
+    persistent_dataloader=True,
+    cuda_prefetch=True,
+    compile_mode="reduce-overhead",
+    precision="float32",
+    deployment=(courses[0], scene, eval_method),
+)
 
-# Plot the commNet losses
-pl.plot_losses(cohort,roster,"commNet",use_log=True)
-
-# Train the Policy
 tp.train_roster(
-    cohort,roster,"commNet",300,
-    regen=True,
-    deployment=(courses[0],scene,eval_method),image_modality="rgb",batch_size=256)
-
-# Plot the commNet losses
-pl.plot_losses(cohort,roster,"commNet",use_log=True)
+    cohort,
+    roster,
+    "commNet",
+    300,
+    regen="missing",
+    image_modality="kronecker_delta",
+    batch_size=64,
+    dataloader_num_workers=8,
+    persistent_dataloader=True,
+    cuda_prefetch=True,
+    compile_mode="reduce-overhead",
+    precision="float32",
+    deployment=(courses[0], scene, eval_method),
+)

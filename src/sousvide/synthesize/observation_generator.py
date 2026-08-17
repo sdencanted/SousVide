@@ -9,6 +9,8 @@ from sousvide.synthesize.image_modality import (
 )
 import sousvide.control.network_helper as nh
 import sousvide.visualize.rich_utilities as ru
+from sousvide.instruct.synthesized_data import (
+    OBSERVATION_FORMAT_VERSION,stack_samples)
 
 from rich.progress import Progress
 from sousvide.control.pilot import Pilot
@@ -97,7 +99,8 @@ def generate_observation_data(cohort:str,roster:list[str],
     
                     # Extract the Observations
                     observations,Nobs = generate_observations(
-                        pilot,traj_ds,imgs_ds,subsample,obsv_bar,image_modality)
+                        pilot,traj_ds,imgs_ds,subsample,obsv_bar,image_modality,
+                        networks=networks)
                     
                     # Update the observations progress bar
                     progress.update(obsv_task,description=obsv_desc2)
@@ -122,7 +125,9 @@ def generate_observations(pilot:Pilot,
                           imgs_set:dict[str,str|int|dict[str,np.ndarray|float,str]],
                           subsample:float=1,
                           progress_bar:tuple[Progress,int]=None,
-                          image_modality:ImageModality="rgb") -> tuple[dict[str,str|int|dict[str,np.ndarray|float,str]],int]:
+                          image_modality:ImageModality="rgb",
+                          networks:list[str]|None=None
+                          ) -> tuple[dict[str,str|int|dict[str,np.ndarray|float,str]],int]:
     
     # Initialize the observation data dictionary
     Observations = []
@@ -185,8 +190,20 @@ def generate_observations(pilot:Pilot,
             wrs_cr = Wrs[k,:]
             rgb_cr = Rgbs[k,:,:,:]
             
-            # Rollout and collect the inputs
-            _,Dnn_cr,_ = pilot.ORCA(tcr,xcr,upr,rgb_cr,None,wro_cr)
+            if networks is None:
+                # Preserve the original full-policy behavior for callers that
+                # request observation data for every network.
+                _,Dnn_cr,_ = pilot.ORCA(
+                    tcr,xcr,upr,rgb_cr,None,wro_cr)
+            else:
+                # Roll out sensor/history state, then collect only the requested
+                # prediction inputs. Prerequisite networks execute, but the final
+                # target (normally CommNet) does not needlessly run.
+                pilot.observe(tcr,xcr,upr,rgb_cr,None,wro_cr)
+                pilot.retain()
+                Xnn_cr = pilot.collate()
+                Dnn_cr = pilot.policy.collect_prediction_inputs(
+                    Xnn_cr,networks)
 
             # Compute the source labels
             ynn_srcs = {
@@ -292,6 +309,11 @@ def save_observations(cohort_name:str,course_name:str,
                 Xnn.append(xnn[topic_name])
                 Ynn.append(ynn[topic_name])
 
-        data = {"Xnn":Xnn,"Ynn":Ynn,"Ndata":len(Ynn)}
+        data = {
+            "format_version":OBSERVATION_FORMAT_VERSION,
+            "Xnn":stack_samples(Xnn),
+            "Ynn":stack_samples(Ynn),
+            "Ndata":len(Ynn),
+        }
         
         torch.save(data,data_path)

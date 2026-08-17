@@ -1,0 +1,70 @@
+Config: /home/airlab/SousVide/configs/pilots/Maverick.json
+PyTorch: 2.13.0+cu132 | device: cuda
+GPU: NVIDIA GeForce RTX 5090
+Loaded commNet checkpoint: /home/airlab/SousVide/cohorts/robustness/roster/Maverick/commNet_kronecker_delta.pt
+
+========================================================================================
+commNet (svnet) | training | cuda | batch 256 | compile=none
+========================================================================================
+Inputs:  {'rgb_image': [256, 3, 224, 224], 'current1': [256, 5], 'current2': [256, 8], 'feature_vector': [256, 8]}
+Outputs: {'command': [256, 4]}
+Parameters: 1,940,244 (7.40 MiB); trainable 1,940,244
+Latency: mean 38.391 ms | median 38.389 ms | p95 38.412 ms | 6668.27 samples/s
+Estimated profiler FLOPs/step: 179.847G (supported operators only)
+Positive CPU allocation volume/profiled step: 4.00 B
+Peak CUDA memory allocated: 5.41 GiB (17.3% of device memory)
+Chrome trace: /home/airlab/SousVide/profiles/commnet-eager/commNet_training.json
+
+Bottleneck diagnosis (heuristic):
+  Regime: memory-bandwidth-bound candidate
+  Scope:  model compute only
+  GPU mix: compute 42.5% | pointwise/memory 31.8% | copy/cast 0.1%
+  Launch clues: short-call fraction 18.0% | device-active proxy 100.0% | 854.0 device calls/step
+  Phases (CPU total / device total per profiled step):
+    zero_grad            49.1 us /        0.0 us
+    forward               0.0 us /    15237.9 us
+    loss                  0.0 us /        4.4 us
+    backward              0.0 us /        0.8 us
+    optimizer          1021.0 us /      114.9 us
+  Evidence:
+    - Compute-like operators account for 42.5% of self device time.
+    - Pointwise and memory-like operators account for 31.8% of self device time.
+    - 18.0% of device-associated operator calls average 20 us or less.
+    - Device work occupies roughly 100.0% of the benchmarked step wall time (a profiler-derived proxy, not nvidia-smi utilization).
+    - torch.profiler does not measure total HBM bytes, so the bandwidth classification uses operator mix and kernel size rather than a true FLOPs/byte roofline measurement.
+  Suggested next checks:
+    - Test --compile reduce-overhead to fuse pointwise chains and reduce round-trips through device memory.
+    - Remove or batch .item(), .cpu(), and explicit synchronization calls from the hot loop where correctness allows.
+    - This run isolates model compute. Use --profile-input-transfer to measure synthetic H2D cost; profile the real DataLoader separately for I/O stalls.
+  Categorized hot operators:
+    - [compute        ] aten::convolution_backward: 13039.4 us/step, 26.0 calls/step
+    - [compute        ] aten::cudnn_convolution: 5763.5 us/step, 26.0 calls/step
+    - [other          ] aten::threshold_backward: 4402.7 us/step, 31.0 calls/step
+    - [other          ] Command Buffer Full: 3739.8 us/step, 117.8 calls/step
+    - [pointwise      ] aten::add_: 3123.3 us/step, 98.0 calls/step
+
+Top operators:
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg       CPU Mem  Self CPU Mem      CUDA Mem  Self CUDA Mem    # of Calls   Total FLOPs  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                          phase:forward         0.00%       0.000us         0.00%       0.000us       0.000us     152.379ms        39.20%     152.379ms      15.238ms           0 B           0 B           0 B           0 B            10            --  
+                             aten::convolution_backward         0.84%       5.122ms        25.97%     159.040ms     611.690us     130.394ms        33.54%     148.506ms     571.178us           0 B           0 B      15.05 GB      15.00 GB           260            --  
+                                aten::cudnn_convolution         0.38%       2.325ms         1.53%       9.361ms      36.003us      57.635ms        14.83%      82.272ms     316.431us           0 B           0 B      24.79 GB      24.79 GB           260            --  
+                               aten::threshold_backward         0.17%       1.027ms         2.93%      17.952ms      57.911us      44.027ms        11.32%      44.027ms     142.022us           0 B           0 B      24.75 GB      24.75 GB           310            --  
+                                    Command Buffer Full        37.60%     230.254ms        37.60%     230.254ms     195.462us      37.398ms         9.62%      37.398ms      31.747us           0 B           0 B           0 B           0 B          1178            --  
+                                             aten::add_         0.18%       1.074ms         1.28%       7.847ms       8.007us      31.233ms         8.03%      36.213ms      36.952us           0 B           0 B           0 B           0 B           980            --  
+                 aten::max_pool2d_with_indices_backward         0.02%     148.102us         0.06%     376.648us      12.555us      30.531ms         7.85%      38.135ms       1.271ms           0 B           0 B      12.99 GB      12.99 GB            30            --  
+void at::native::(anonymous namespace)::max_pool_bac...         0.00%       0.000us         0.00%       0.000us       0.000us      30.531ms         7.85%      30.531ms       1.018ms           0 B           0 B           0 B           0 B            30            --  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      29.100ms         7.49%      29.100ms     111.922us           0 B           0 B           0 B           0 B           260            --  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      27.433ms         7.06%      27.433ms      88.493us           0 B           0 B           0 B           0 B           310            --  
+                                       aten::clamp_min_         0.06%     377.450us         0.67%       4.114ms      15.824us      27.387ms         7.04%      28.767ms     110.644us           0 B           0 B           0 B           0 B           260            --  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      23.731ms         6.10%      23.731ms     148.316us           0 B           0 B           0 B           0 B           160            --  
+void implicit_convolve_sgemm<float, float, 1024, 5, ...         0.00%       0.000us         0.00%       0.000us       0.000us      22.452ms         5.78%      22.452ms     748.394us           0 B           0 B           0 B           0 B            30            --  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      20.296ms         5.22%      20.296ms     135.308us           0 B           0 B           0 B           0 B           150            --  
+                                              aten::cat         0.07%     442.367us         0.33%       2.008ms      20.077us      19.284ms         4.96%      24.460ms     244.599us           0 B           0 B      13.86 GB      13.86 GB           100            --  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 612.349ms
+Self CUDA time total: 388.760ms
+
+
+JSON summary: /home/airlab/SousVide/profiles/commnet-eager.json

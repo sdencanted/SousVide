@@ -1,0 +1,249 @@
+{
+  "config": "/home/airlab/SousVide/configs/pilots/Maverick.json",
+  "torch_version": "2.13.0+cu132",
+  "device": "cuda",
+  "results": [
+    {
+      "network": "commNet",
+      "network_type": "svnet",
+      "mode": "training",
+      "compile_mode": "none",
+      "device": "cuda",
+      "batch_size": 256,
+      "profile_scope": "model compute only",
+      "parameters": 1940244,
+      "trainable_parameters": 1940244,
+      "parameter_bytes": 7760976,
+      "input_shapes": {
+        "rgb_image": [
+          256,
+          3,
+          224,
+          224
+        ],
+        "current1": [
+          256,
+          5
+        ],
+        "current2": [
+          256,
+          8
+        ],
+        "feature_vector": [
+          256,
+          8
+        ]
+      },
+      "output_shapes": {
+        "command": [
+          256,
+          4
+        ]
+      },
+      "latency_ms": {
+        "mean": 38.390792172867805,
+        "median": 38.38874900247902,
+        "p95": 38.411948014982045,
+        "minimum": 38.37020799983293,
+        "maximum": 38.41574501711875
+      },
+      "samples_per_second": 6668.265631177173,
+      "estimated_flops_per_step": 179846596609.0,
+      "positive_cpu_allocation_bytes_per_profiled_step": 4.0,
+      "diagnosis": {
+        "regime": "memory-bandwidth-bound candidate",
+        "heuristic": true,
+        "metrics": {
+          "benchmark_step_wall_us": 38390.792172867805,
+          "self_cpu_us_per_step": 57870.603799999946,
+          "self_device_us_per_step": 81730.59120000005,
+          "device_active_time_proxy": 1.0,
+          "compute_device_time_fraction": 0.425363822646619,
+          "pointwise_device_time_fraction": 0.1815378254598988,
+          "memory_like_device_time_fraction": 0.13604699949851806,
+          "bandwidth_device_time_fraction": 0.3175848249584169,
+          "copy_cast_device_time_fraction": 0.0006875308152670417,
+          "input_transfer_device_time_fraction": 0.0,
+          "small_device_operator_call_fraction": 0.18032786885245902,
+          "device_operator_calls_per_step": 854.0,
+          "explicit_synchronization_calls_per_step": 256.1
+        },
+        "phase_breakdown": {
+          "zero_grad": {
+            "cpu_total_us_per_step": 49.09250000000403,
+            "device_total_us_per_step": 0.0
+          },
+          "forward": {
+            "cpu_total_us_per_step": 0.0,
+            "device_total_us_per_step": 15237.9028
+          },
+          "loss": {
+            "cpu_total_us_per_step": 0.0,
+            "device_total_us_per_step": 4.400000000006185
+          },
+          "backward": {
+            "cpu_total_us_per_step": 0.0,
+            "device_total_us_per_step": 0.7615999999969063
+          },
+          "optimizer": {
+            "cpu_total_us_per_step": 1021.0276000000038,
+            "device_total_us_per_step": 114.85080000001399
+          }
+        },
+        "evidence": [
+          "Compute-like operators account for 42.5% of self device time.",
+          "Pointwise and memory-like operators account for 31.8% of self device time.",
+          "18.0% of device-associated operator calls average 20 us or less.",
+          "Device work occupies roughly 100.0% of the benchmarked step wall time (a profiler-derived proxy, not nvidia-smi utilization).",
+          "torch.profiler does not measure total HBM bytes, so the bandwidth classification uses operator mix and kernel size rather than a true FLOPs/byte roofline measurement."
+        ],
+        "recommendations": [
+          "Test --compile reduce-overhead to fuse pointwise chains and reduce round-trips through device memory.",
+          "Remove or batch .item(), .cpu(), and explicit synchronization calls from the hot loop where correctness allows.",
+          "This run isolates model compute. Use --profile-input-transfer to measure synthetic H2D cost; profile the real DataLoader separately for I/O stalls."
+        ],
+        "top_operators": [
+          {
+            "name": "aten::convolution_backward",
+            "category": "compute",
+            "calls_per_step": 26.0,
+            "self_cpu_us_per_step": 512.2067000000012,
+            "self_device_us_per_step": 13039.383000000022,
+            "device_time_percent": 15.954103363931148,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "aten::cudnn_convolution",
+            "category": "compute",
+            "calls_per_step": 26.0,
+            "self_cpu_us_per_step": 232.52710000005646,
+            "self_device_us_per_step": 5763.461900000042,
+            "device_time_percent": 7.051780508838457,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "aten::threshold_backward",
+            "category": "other",
+            "calls_per_step": 31.0,
+            "self_cpu_us_per_step": 102.72549999998341,
+            "self_device_us_per_step": 4402.675299999961,
+            "device_time_percent": 5.386814453876064,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "Command Buffer Full",
+            "category": "other",
+            "calls_per_step": 117.8,
+            "self_cpu_us_per_step": 23025.397899999967,
+            "self_device_us_per_step": 3739.8059000000735,
+            "device_time_percent": 4.575772480158043,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "aten::add_",
+            "category": "pointwise",
+            "calls_per_step": 98.0,
+            "self_cpu_us_per_step": 107.3571000000491,
+            "self_device_us_per_step": 3123.3203000000126,
+            "device_time_percent": 3.8214825735899125,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "aten::max_pool2d_with_indices_backward",
+            "category": "memory-like",
+            "calls_per_step": 3.0,
+            "self_cpu_us_per_step": 14.810200000018176,
+            "self_device_us_per_step": 3053.1150000000007,
+            "device_time_percent": 3.7355841370691065,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void at::native::(anonymous namespace)::max_pool_backward_nchw<float, float, int>(float const*, long const*, int, int, int, int, int, int, int, int, int, int, int, int, int, int, float*)",
+            "category": "memory-like",
+            "calls_per_step": 3.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 3053.1150000000007,
+            "device_time_percent": 3.7355841370691065,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float> >(at::TensorIteratorBase&, at::native::CUDAFunctor_add<float> const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float> >(at::TensorIteratorBase&, at::native::CUDAFunctor_add<float> const&)::{lambda(int)#1})",
+            "category": "pointwise",
+            "calls_per_step": 26.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 2909.976299999994,
+            "device_time_percent": 3.56044934616843,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::launch_clamp_scalar(at::TensorIteratorBase&, c10::Scalar, c10::Scalar, at::native::detail::ClampLimits)::{lambda()#1}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::(anonymous namespace)::launch_clamp_scalar(at::TensorIteratorBase&, c10::Scalar, c10::Scalar, at::native::detail::ClampLimits)::{lambda()#1}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>)",
+            "category": "pointwise",
+            "calls_per_step": 31.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 2743.2679999999937,
+            "device_time_percent": 3.3564763936272515,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "aten::clamp_min_",
+            "category": "other",
+            "calls_per_step": 26.0,
+            "self_cpu_us_per_step": 37.74499999999072,
+            "self_device_us_per_step": 2738.7368000000038,
+            "device_time_percent": 3.35093232508026,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::(anonymous namespace)::threshold_kernel_impl<float>(at::TensorIteratorBase&, float, float)::{lambda(float, float)#1}> >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::(anonymous namespace)::threshold_kernel_impl<float>(at::TensorIteratorBase&, float, float)::{lambda(float, float)#1}> const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::(anonymous namespace)::threshold_kernel_impl<float>(at::TensorIteratorBase&, float, float)::{lambda(float, float)#1}> >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::(anonymous namespace)::threshold_kernel_impl<float>(at::TensorIteratorBase&, float, float)::{lambda(float, float)#1}> const&)::{lambda(int)#1})",
+            "category": "pointwise",
+            "calls_per_step": 16.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 2373.0544999999984,
+            "device_time_percent": 2.90350830106316,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void implicit_convolve_sgemm<float, float, 1024, 5, 5, 3, 3, 3, 1, false, false, true>(int, int, int, float const*, int, float*, float const*, kernel_conv_params, unsigned long long, int, float, float, int, float const*, float const*, bool, bool, int, int)",
+            "category": "compute",
+            "calls_per_step": 3.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 2245.1829000000116,
+            "device_time_percent": 2.747053296734272,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<float, float, float, at::native::(anonymous namespace)::threshold_kernel_impl<float>(at::TensorIteratorBase&, float, float)::{lambda(float, float)#1}>, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<float, float, float, at::native::(anonymous namespace)::threshold_kernel_impl<float>(at::TensorIteratorBase&, float, float)::{lambda(float, float)#1}>, std::array<char*, 3ul>)",
+            "category": "pointwise",
+            "calls_per_step": 15.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 2029.620799999962,
+            "device_time_percent": 2.483306152812903,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "aten::cat",
+            "category": "memory-like",
+            "calls_per_step": 10.0,
+            "self_cpu_us_per_step": 44.23670000000343,
+            "self_device_us_per_step": 1928.370499999985,
+            "device_time_percent": 2.359423162963715,
+            "flops_per_step": 0.0
+          },
+          {
+            "name": "void at::native::(anonymous namespace)::CatArrayBatchedCopy_vectorized<at::native::(anonymous namespace)::OpaqueType<4u>, unsigned int, 2, 128, 1, 16, 4>(char*, at::native::(anonymous namespace)::CatArrInputTensorMetadata<at::native::(anonymous namespace)::OpaqueType<4u>, unsigned int, 128, 1>, at::native::(anonymous namespace)::TensorSizeStride<unsigned int, 4u>, int, unsigned int)",
+            "category": "other",
+            "calls_per_step": 9.0,
+            "self_cpu_us_per_step": 0.0,
+            "self_device_us_per_step": 1926.261699999986,
+            "device_time_percent": 2.3568429785198775,
+            "flops_per_step": 0.0
+          }
+        ]
+      },
+      "peak_cuda_allocated_bytes": 5804612608,
+      "total_cuda_memory_bytes": 33647230976,
+      "peak_cuda_memory_fraction": 0.1725138277244963,
+      "trace_path": "/home/airlab/SousVide/profiles/commnet-eager/commNet_training.json"
+    }
+  ]
+}

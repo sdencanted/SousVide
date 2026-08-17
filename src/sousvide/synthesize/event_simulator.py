@@ -114,7 +114,7 @@ class EventSimulator(Simulator):
         # integrations only produce the terminal trajectory state.
         final_event_step = nsim - n_sim2ctl
         policy_name = getattr(policy,"name",policy.__class__.__name__)
-        for i in tqdm(range(nsim), desc=f"Simulating {policy_name} rollout", total=nsim):
+        for i in tqdm(range(nsim), desc=f"Simulating {policy_name} rollout", total=nsim,leave=False):
             tcr = t0 + i / hz_sim
             fcr = fex.get_forces(xcr[0:6], noisy=True)
             pcr = np.hstack((m, kt, fcr))

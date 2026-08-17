@@ -1,0 +1,68 @@
+Config: /home/airlab/SousVide/configs/pilots/Maverick.json
+PyTorch: 2.13.0+cu132 | device: cuda
+GPU: NVIDIA GeForce RTX 5090
+Loaded commNet checkpoint: /home/airlab/SousVide/cohorts/robustness/roster/Maverick/commNet_kronecker_delta.pt
+
+========================================================================================
+commNet (svnet) | training | cuda | batch 256 | compile=reduce-overhead
+========================================================================================
+Inputs:  {'rgb_image': [256, 3, 224, 224], 'current1': [256, 5], 'current2': [256, 8], 'feature_vector': [256, 8]}
+Outputs: {'command': [256, 4]}
+Parameters: 1,940,244 (7.40 MiB); trainable 1,940,244
+Latency: mean 29.900 ms | median 29.888 ms | p95 29.976 ms | 8561.74 samples/s
+Estimated profiler FLOPs/step: 2.049K (supported operators only)
+Positive CPU allocation volume/profiled step: 4.00 B
+Peak CUDA memory allocated: 179.79 MiB (0.6% of device memory)
+Chrome trace: /home/airlab/SousVide/profiles/commnet-compiled/commNet_training.json
+
+Bottleneck diagnosis (heuristic):
+  Regime: mixed or inconclusive GPU bottleneck
+  Scope:  model compute only
+  GPU mix: compute 17.3% | pointwise/memory 6.6% | copy/cast 0.1%
+  Launch clues: short-call fraction 46.8% | device-active proxy 100.0% | 442.2 device calls/step
+  Phases (CPU total / device total per profiled step):
+    zero_grad            29.4 us /        0.0 us
+    forward             381.0 us /    10287.1 us
+    loss                  0.0 us /        4.3 us
+    backward              0.0 us /        0.8 us
+    optimizer           712.5 us /      108.4 us
+  Evidence:
+    - Compute-like operators account for 17.3% of self device time.
+    - Pointwise and memory-like operators account for 6.6% of self device time.
+    - 46.8% of device-associated operator calls average 20 us or less.
+    - Device work occupies roughly 100.0% of the benchmarked step wall time (a profiler-derived proxy, not nvidia-smi utilization).
+    - torch.profiler does not measure total HBM bytes, so the bandwidth classification uses operator mix and kernel size rather than a true FLOPs/byte roofline measurement.
+  Suggested next checks:
+    - Open the Chrome trace and inspect the dominant operators and gaps before choosing an optimization.
+    - Remove or batch .item(), .cpu(), and explicit synchronization calls from the hot loop where correctness allows.
+    - This run isolates model compute. Use --profile-input-transfer to measure synthetic H2D cost; profile the real DataLoader separately for I/O stalls.
+  Categorized hot operators:
+    - [other          ] ## Call CompiledFxGraph fo5jxz2bvl2afjdsm26fykmphfqestttdmbspwgqdzq3hydtolhm ##: 39981.2 us/step, 7.0 calls/step
+    - [other          ] CompiledFunctionBackward: 19950.1 us/step, 1.0 calls/step
+    - [other          ] ## Call CompiledFxGraph fmcoygl27zdk25vqa3lex7gvaarp5uwa7lyvwgzyg346xljz3tt6 ##: 10261.3 us/step, 1.0 calls/step
+    - [other          ] CompiledFunction: 10068.5 us/step, 1.0 calls/step
+    - [memory-like    ] triton_poi_fused_max_pool2d_with_indices_max_pool2d_with_indices_backward_54: 2280.8 us/step, 1.0 calls/step
+
+Top operators:
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg       CPU Mem  Self CPU Mem      CUDA Mem  Self CUDA Mem    # of Calls   Total FLOPs  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+## Call CompiledFxGraph fo5jxz2bvl2afjdsm26fykmphfqe...         0.00%       0.000us         0.00%       0.000us       0.000us     399.812ms       131.73%     399.812ms       5.712ms           0 B           0 B           0 B           0 B            70            --  
+                               CompiledFunctionBackward         0.17%     518.991us         0.96%       2.932ms     293.215us     199.501ms        65.73%     199.511ms      19.951ms           0 B           0 B     -40.00 KB           0 B            10            --  
+## Call CompiledFxGraph fmcoygl27zdk25vqa3lex7gvaarp...         0.00%       0.000us         0.00%       0.000us       0.000us     102.613ms        33.81%     102.613ms      10.261ms           0 B           0 B           0 B           0 B            10            --  
+                                       CompiledFunction         0.16%     475.688us         0.85%       2.595ms     259.530us     100.685ms        33.17%     102.871ms      10.287ms           0 B           0 B           0 B           0 B            10            --  
+triton_poi_fused_max_pool2d_with_indices_max_pool2d_...         0.00%       0.000us         0.00%       0.000us       0.000us      22.808ms         7.51%      22.808ms       2.281ms           0 B           0 B           0 B           0 B            10            --  
+void wgrad_alg0_engine_NHWC<float, 128, 6, 7, 3, 3, ...         0.00%       0.000us         0.00%       0.000us       0.000us      13.121ms         4.32%      13.121ms     656.043us           0 B           0 B           0 B           0 B            20            --  
+void cudnn::engines_precompiled::convertTensor_kerne...         0.00%       0.000us         0.00%       0.000us       0.000us      12.198ms         4.02%      12.198ms      29.043us           0 B           0 B           0 B           0 B           420            --  
+triton_poi_fused_max_pool2d_with_indices_backward_th...         0.00%       0.000us         0.00%       0.000us       0.000us      11.839ms         3.90%      11.839ms       1.184ms           0 B           0 B           0 B           0 B            10            --  
+triton_poi_fused_convolution_relu_threshold_backward...         0.00%       0.000us         0.00%       0.000us       0.000us      11.822ms         3.90%      11.822ms       1.182ms           0 B           0 B           0 B           0 B            10            --  
+void cutlass::Kernel2<cutlass_80_tensorop_s1688gemm_...         0.00%       0.000us         0.00%       0.000us       0.000us      11.541ms         3.80%      11.541ms     104.919us           0 B           0 B           0 B           0 B           110            --  
+sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_tf32f3...         0.00%       0.000us         0.00%       0.000us       0.000us      11.066ms         3.65%      11.066ms     368.872us           0 B           0 B           0 B           0 B            30            --  
+void fft2d_r2c_32x32<float, false, 0u, false>(float2...         0.00%       0.000us         0.00%       0.000us       0.000us      10.680ms         3.52%      10.680ms     133.502us           0 B           0 B           0 B           0 B            80            --  
+triton_poi_fused_max_pool2d_with_indices_max_pool2d_...         0.00%       0.000us         0.00%       0.000us       0.000us      10.270ms         3.38%      10.270ms       1.027ms           0 B           0 B           0 B           0 B            10            --  
+void cutlass__5x_cudnn::Kernel<cutlass_tensorop_s168...         0.00%       0.000us         0.00%       0.000us       0.000us       6.813ms         2.24%       6.813ms     170.331us           0 B           0 B           0 B           0 B            40            --  
+sm80_xmma_wgrad_implicit_gemm_indexed_tf32f32_tf32f3...         0.00%       0.000us         0.00%       0.000us       0.000us       6.777ms         2.23%       6.777ms     169.421us           0 B           0 B           0 B           0 B            40            --  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 305.364ms
+Self CUDA time total: 303.504ms
+

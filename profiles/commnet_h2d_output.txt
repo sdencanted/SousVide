@@ -1,0 +1,68 @@
+Config: /home/airlab/SousVide/configs/pilots/Maverick.json
+PyTorch: 2.13.0+cu132 | device: cuda
+GPU: NVIDIA GeForce RTX 5090
+
+========================================================================================
+commNet (svnet) | training | cuda | batch 256 | compile=none
+========================================================================================
+Inputs:  {'rgb_image': [256, 3, 224, 224], 'current1': [256, 5], 'current2': [256, 8], 'feature_vector': [256, 8]}
+Outputs: {'command': [256, 4]}
+Parameters: 1,940,244 (7.40 MiB); trainable 1,940,244
+Latency: mean 41.007 ms | median 41.007 ms | p95 41.031 ms | 6242.91 samples/s
+Estimated profiler FLOPs/step: 179.847G (supported operators only)
+Positive CPU allocation volume/profiled step: 4.00 B
+Peak CUDA memory allocated: 5.41 GiB (17.3% of device memory)
+
+Bottleneck diagnosis (heuristic):
+  Regime: memory-bandwidth-bound candidate
+  Scope:  model plus synthetic input transfer
+  GPU mix: compute 39.8% | pointwise/memory 29.7% | copy/cast 6.2%
+  Input copy: 3.1% of self device time
+  Launch clues: short-call fraction 17.9% | device-active proxy 100.0% | 859.6 device calls/step
+  Phases (CPU total / device total per profiled step):
+    input_transfer        0.0 us /     2677.0 us
+    zero_grad            45.8 us /        0.0 us
+    forward               0.0 us /    15236.6 us
+    loss                  0.0 us /        4.3 us
+    backward              0.0 us /        0.8 us
+    optimizer          1007.7 us /      104.9 us
+  Evidence:
+    - Compute-like operators account for 39.8% of self device time.
+    - Pointwise and memory-like operators account for 29.7% of self device time.
+    - 17.9% of device-associated operator calls average 20 us or less.
+    - Device work occupies roughly 100.0% of the benchmarked step wall time (a profiler-derived proxy, not nvidia-smi utilization).
+    - torch.profiler does not measure total HBM bytes, so the bandwidth classification uses operator mix and kernel size rather than a true FLOPs/byte roofline measurement.
+  Suggested next checks:
+    - Test --compile reduce-overhead to fuse pointwise chains and reduce round-trips through device memory.
+    - Remove or batch .item(), .cpu(), and explicit synchronization calls from the hot loop where correctness allows.
+    - Add --trace-dir profiles/traces and inspect the trace in Perfetto or chrome://tracing to verify kernel gaps and overlap.
+  Categorized hot operators:
+    - [compute        ] aten::convolution_backward: 13044.4 us/step, 26.0 calls/step
+    - [compute        ] aten::cudnn_convolution: 5762.5 us/step, 26.0 calls/step
+    - [other          ] aten::threshold_backward: 4407.0 us/step, 31.0 calls/step
+    - [other          ] Command Buffer Full: 3866.4 us/step, 116.4 calls/step
+    - [pointwise      ] aten::add_: 3122.3 us/step, 98.0 calls/step
+
+Top operators:
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg       CPU Mem  Self CPU Mem      CUDA Mem  Self CUDA Mem    # of Calls   Total FLOPs  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                          phase:forward         0.00%       0.000us         0.00%       0.000us       0.000us     152.366ms        36.67%     152.366ms      15.237ms           0 B           0 B           0 B           0 B            10            --  
+                             aten::convolution_backward         0.77%       5.047ms        27.25%     179.679ms     691.074us     130.444ms        31.39%     148.508ms     571.184us           0 B           0 B      15.05 GB      15.00 GB           260            --  
+                                aten::cudnn_convolution         0.35%       2.330ms         1.34%       8.838ms      33.991us      57.625ms        13.87%      81.937ms     315.141us           0 B           0 B      24.79 GB      24.79 GB           260            --  
+                               aten::threshold_backward         0.15%       1.020ms         2.75%      18.153ms      58.559us      44.070ms        10.61%      44.070ms     142.160us           0 B           0 B      24.75 GB      24.75 GB           310            --  
+                                    Command Buffer Full        38.16%     251.648ms        38.16%     251.648ms     216.192us      38.664ms         9.30%      38.664ms      33.216us           0 B           0 B           0 B           0 B          1164            --  
+                                             aten::add_         0.17%       1.090ms         1.22%       8.040ms       8.205us      31.223ms         7.51%      36.375ms      37.118us           0 B           0 B           0 B           0 B           980            --  
+                 aten::max_pool2d_with_indices_backward         0.02%     149.753us         0.06%     371.917us      12.397us      30.582ms         7.36%      38.189ms       1.273ms           0 B           0 B      12.99 GB      12.99 GB            30            --  
+void at::native::(anonymous namespace)::max_pool_bac...         0.00%       0.000us         0.00%       0.000us       0.000us      30.582ms         7.36%      30.582ms       1.019ms           0 B           0 B           0 B           0 B            30            --  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      29.089ms         7.00%      29.089ms     111.880us           0 B           0 B           0 B           0 B           260            --  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      27.429ms         6.60%      27.429ms      88.479us           0 B           0 B           0 B           0 B           310            --  
+                                       aten::clamp_min_         0.06%     371.814us         0.65%       4.285ms      16.479us      27.383ms         6.59%      28.793ms     110.742us           0 B           0 B           0 B           0 B           260            --  
+                                   phase:input_transfer         0.00%       0.000us         0.00%       0.000us       0.000us      26.770ms         6.44%      26.770ms       2.677ms           0 B           0 B           0 B           0 B            10            --  
+                                            aten::copy_         0.02%     146.141us         0.16%       1.068ms      21.351us      26.767ms         6.44%      29.435ms     588.700us           0 B           0 B           0 B           0 B            50            --  
+                         Memcpy HtoD (Pinned -> Device)         0.00%       0.000us         0.00%       0.000us       0.000us      26.759ms         6.44%      26.759ms     668.964us           0 B           0 B           0 B           0 B            40            --  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      23.747ms         5.71%      23.747ms     148.416us           0 B           0 B           0 B           0 B           160            --  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 659.470ms
+Self CUDA time total: 415.537ms
+

@@ -1,0 +1,66 @@
+{
+  "waypoints": {
+    "Nco": 6,
+    "keyframes": {
+      "fo0": {
+        "t": 1.0,
+        "fo": [
+          [
+            2.1934722988332194,
+            null,
+            null,
+            null
+          ],
+          [
+            -7.888609052210118e-32,
+            null,
+            null,
+            null
+          ],
+          [
+            -0.6860924235039176,
+            null,
+            null,
+            null
+          ],
+          [
+            -0.0,
+            null,
+            null,
+            null
+          ]
+        ]
+      },
+      "fo1": {
+        "t": 1.0,
+        "fo": [
+          [
+            0.0,
+            null,
+            null,
+            null
+          ],
+          [
+            0.0,
+            null,
+            null,
+            null
+          ],
+          [
+            0.0,
+            null,
+            null,
+            null
+          ],
+          [
+            0.0,
+            null,
+            null,
+            null
+          ]
+        ]
+      }
+    }
+  },
+  "forces": null
+}

@@ -63,6 +63,39 @@ class Policy(nn.Module):
         self.networks = networks
         self.network_paths = network_paths
 
+    def collect_prediction_inputs(
+            self,Xnn:dict[str,torch.Tensor],
+            network_names:list[str]|None=None
+            ) -> dict[str,dict[str,torch.Tensor]]:
+        """Collect training inputs without executing the final target network.
+
+        Networks preceding the last requested network still execute because their
+        outputs may be inputs to a downstream target. The last target itself is not
+        executed, avoiding an unnecessary CommNet forward pass during synthesis.
+        """
+        ordered_names = list(self.networks.keys())
+        requested = ordered_names if network_names is None else network_names
+        unknown = set(requested)-set(ordered_names)
+        if unknown:
+            raise ValueError(f"Unknown policy networks requested: {sorted(unknown)}")
+        if not requested:
+            return {}
+
+        requested_set = set(requested)
+        last_target_index = max(ordered_names.index(name) for name in requested)
+        prediction_inputs = {}
+        with torch.inference_mode():
+            for index,net_name in enumerate(ordered_names[:last_target_index+1]):
+                network = self.networks[net_name]
+                network_inputs = nh.extract_io(Xnn,network.io_idxs["xdp"])
+                if net_name in requested_set:
+                    prediction_inputs[net_name] = network_inputs
+
+                if index < last_target_index:
+                    Xnn = Xnn|network(network_inputs)
+
+        return prediction_inputs
+
     def forward(self,Xnn:dict[str,torch.Tensor]) -> tuple[
                     torch.Tensor,dict[str,torch.Tensor],dict[str,torch.Tensor]]:
         """
