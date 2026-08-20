@@ -51,34 +51,37 @@ tp.train_roster(
 # # Plot the histNet losses
 # pl.plot_losses(cohort,roster,"histNet",use_log=True)
 
-tp.train_roster(
-    cohort,
-    roster,
-    "commNet",
-    300,
-    regen="missing",
-    image_modality="rgb",
-    batch_size=64,
-    dataloader_num_workers=8,
-    persistent_dataloader=True,
-    cuda_prefetch=True,
-    compile_mode="reduce-overhead",
-    precision="float32",
-    deployment=(courses[0], scene, eval_method),
-)
+# Refresh CommNet inputs after HistNet training. Keep generation separate so
+# original numerical mode starts from fixed observation files and RNG state.
+og.generate_observation_data(
+    cohort,roster,networks=["commNet"],image_modality="rgb")
 
 tp.train_roster(
     cohort,
     roster,
     "commNet",
     300,
-    regen="missing",
+    image_modality="rgb",
+    batch_size=64,
+    dataloader_num_workers=8,
+    cuda_prefetch=True,
+    numerical_mode="original",
+    deployment=(courses[0], scene, eval_method),
+)
+
+og.generate_observation_data(
+    cohort,roster,networks=["commNet"],
+    image_modality="kronecker_delta")
+
+tp.train_roster(
+    cohort,
+    roster,
+    "commNet",
+    300,
     image_modality="kronecker_delta",
     batch_size=64,
     dataloader_num_workers=8,
-    persistent_dataloader=True,
     cuda_prefetch=True,
-    compile_mode="reduce-overhead",
-    precision="float32",
+    numerical_mode="original",
     deployment=(courses[0], scene, eval_method),
 )

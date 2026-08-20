@@ -61,13 +61,13 @@ def _validate_numerical_mode_options(
         return
 
     conflicts = []
-    if network_name != "histNet":
-        conflicts.append("network_name must be 'histNet'")
+    if network_name not in ("histNet","commNet"):
+        conflicts.append("network_name must be 'histNet' or 'commNet'")
     if regen is not False:
         conflicts.append("regen must be False")
-    if deployment is not None:
-        conflicts.append("deployment must be None")
-    if image_modality != "rgb":
+    if network_name == "histNet" and deployment is not None:
+        conflicts.append("deployment must be None for 'histNet'")
+    if network_name == "histNet" and image_modality != "rgb":
         conflicts.append("image_modality must be 'rgb'")
     if compile_mode != "none":
         conflicts.append("compile_mode must be 'none'")
@@ -420,24 +420,37 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
         course,scene,eval_method = deployment
         ckpts_path = os.path.join(student_path,"ckpts",artifact_name)
         os.makedirs(ckpts_path,exist_ok=True)
-
-        checkpoint_start = time.perf_counter()
-        torch.save(network,network_path)
         ckpt_path = os.path.join(
             ckpts_path,artifact_name+"_ckpt"+str(0).zfill(3)+".pt")
-        torch.save(network,ckpt_path)
-        setup_timings["initial_checkpoint_seconds"] = (
-            time.perf_counter()-checkpoint_start)
+
+        if numerical_mode != "original":
+            # Modern mode makes a newly initialized network available to the
+            # deployment loader before evaluating it.
+            checkpoint_start = time.perf_counter()
+            torch.save(network,network_path)
+            torch.save(network,ckpt_path)
+            setup_timings["initial_checkpoint_seconds"] = (
+                time.perf_counter()-checkpoint_start)
 
         deployment_start = time.perf_counter()
         with contextlib.redirect_stdout(io.StringIO()):
             metric = df.deploy_roster(
                 cohort_name,course,scene,eval_method,[student_name],
-                mode="evaluate",image_modality=image_modality)
+                mode="evaluate",image_modality=image_modality,
+                require_commnet_weights=numerical_mode != "original")
         setup_timings["initial_deployment_seconds"] = (
             time.perf_counter()-deployment_start)
         Eval_tte.append((0,metric[student_name]["TTE"]["mean"]))
-    if numerical_mode == "original":
+
+        # The legacy trainer records checkpoint zero after its initial
+        # deployment. Keep modality-specific names to prevent RGB/event
+        # checkpoints from colliding in the current repository.
+        if numerical_mode == "original":
+            checkpoint_start = time.perf_counter()
+            torch.save(network,ckpt_path)
+            setup_timings["initial_checkpoint_seconds"] = (
+                time.perf_counter()-checkpoint_start)
+    if numerical_mode == "original" and deployment is None:
         # Match the legacy no-deployment loss-log layout.
         Eval_tte = [[]]
 
@@ -624,7 +637,8 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                 with contextlib.redirect_stdout(io.StringIO()):
                     metric = df.deploy_roster(
                         cohort_name,course,scene,eval_method,[student_name],
-                        mode="evaluate",image_modality=image_modality)
+                        mode="evaluate",image_modality=image_modality,
+                        require_commnet_weights=numerical_mode != "original")
                 deployment_seconds = time.perf_counter()-deployment_start
                 Eval_tte.append(
                     (ep+1,metric[student_name]["TTE"]["mean"]))

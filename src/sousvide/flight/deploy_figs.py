@@ -153,7 +153,8 @@ def deploy_roster(cohort_name:str,
                   show_table:bool=False,
                   image_modality:ImageModality="rgb",
                   event_device:Literal["auto","cpu","cuda"]="auto",
-                  debug:bool=False) -> Union[None,dict]:
+                  debug:bool=False,
+                  require_commnet_weights:bool=True) -> Union[None,dict]:
     """"
     Simulate a roster of pilots on a given course within a given scene on
     variations of a specific drone frame using a specified method. This is
@@ -174,6 +175,7 @@ def deploy_roster(cohort_name:str,
         image_modality: Visual input used by student pilots.
         event_device:   Device used for synchronous online v2e processing.
         debug:          Show each policy image, thrust, and body-rate output live in a notebook.
+        require_commnet_weights: Reject student deployment when selected CommNet weights are missing.
 
     Returns:
         None:           The function saves the simulation data and video to disk.
@@ -256,7 +258,7 @@ def deploy_roster(cohort_name:str,
         else:
             controller = Pilot(
                 cohort_name,pilot,image_modality=image_modality,
-                require_commnet_weights=True)
+                require_commnet_weights=require_commnet_weights)
             controller.set_mode('deploy')
         base_controller = controller
         controller_modality = "rgb" if pilot == "expert" else image_modality

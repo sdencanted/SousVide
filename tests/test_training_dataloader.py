@@ -45,6 +45,22 @@ class _TinyHistNet(torch.nn.Module):
         return {"parameters":self.layers(dynamics)}
 
 
+class _TinyCommNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = torch.nn.Sequential(
+            torch.nn.Linear(6,8),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(8,4),
+        )
+
+    def forward(self,inputs):
+        image = torch.flatten(inputs["rgb_image"],start_dim=1)
+        features = torch.flatten(inputs["feature_vector"],start_dim=1)
+        return {"command":self.layers(torch.cat((image,features),dim=1))}
+
+
 def _run_legacy_reference(network,train_paths,test_paths,epochs,batch_size):
     optimizer = torch.optim.Adam(network.parameters(),lr=1e-4)
     criterion = LossFn()
@@ -212,7 +228,7 @@ class TrainingDataLoaderTests(unittest.TestCase):
 
     def test_original_numerical_mode_rejects_incompatible_options(self):
         incompatible = [
-            {"network_name":"commNet"},
+            {"network_name":"otherNet"},
             {"regen":True},
             {"deployment":("course","scene","method")},
             {"image_modality":"kronecker_delta"},
@@ -240,6 +256,16 @@ class TrainingDataLoaderTests(unittest.TestCase):
                     _validate_numerical_mode_options(**options)
 
         _validate_numerical_mode_options(**defaults)
+        for image_modality in ("rgb","kronecker_delta"):
+            with self.subTest(
+                    network_name="commNet",image_modality=image_modality):
+                _validate_numerical_mode_options(**(
+                    defaults|{
+                        "network_name":"commNet",
+                        "image_modality":image_modality,
+                        "deployment":("course","scene","method"),
+                    }
+                ))
 
     def test_original_numerical_mode_matches_legacy_weights_rng_and_logs(self):
         batch_size,epochs = 3,2
@@ -342,6 +368,198 @@ class TrainingDataLoaderTests(unittest.TestCase):
                     self.assertEqual(reference["Nd_tt"],entry["Nd_tt"])
                     self.assertEqual(entry["numerical_mode"],"original")
                     self.assertEqual(entry["Eval_tte"].shape,(0,2))
+
+    def test_original_commnet_matches_legacy_weights_rng_and_logs(self):
+        batch_size,epochs = 3,2
+        samples = [
+            {
+                "rgb_image":torch.arange(
+                    index*4,(index+1)*4,dtype=torch.float32
+                ).reshape(1,1,2,2)/20,
+                "feature_vector":torch.tensor(
+                    [[index/11,(index+1)/13]],dtype=torch.float32),
+            }
+            for index in range(14)
+        ]
+        labels = [
+            {"command":torch.tensor(
+                [[index/5,(index+1)/7,(index+2)/9,(index+3)/11]],
+                dtype=torch.float32)}
+            for index in range(14)
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            legacy_path = os.path.join(temp_dir,"legacy.pt")
+            packed_path = os.path.join(temp_dir,"packed.pt")
+            test_path = os.path.join(temp_dir,"test.pt")
+            torch.save(
+                {"Xnn":samples[:5],"Ynn":labels[:5]},legacy_path)
+            torch.save(
+                {
+                    "format_version":OBSERVATION_FORMAT_VERSION,
+                    "Xnn":stack_samples(samples[5:9]),
+                    "Ynn":stack_samples(labels[5:9]),
+                },
+                packed_path,
+            )
+            torch.save(
+                {
+                    "format_version":OBSERVATION_FORMAT_VERSION,
+                    "Xnn":stack_samples(samples[9:]),
+                    "Ynn":stack_samples(labels[9:]),
+                },
+                test_path,
+            )
+            train_paths = [legacy_path,packed_path]
+            test_paths = [test_path]
+
+            torch.manual_seed(81)
+            base_network = _TinyCommNet()
+            initial_rng = torch.get_rng_state().clone()
+
+            for image_modality in ("rgb","kronecker_delta"):
+                for worker_count in (0,2):
+                    with self.subTest(
+                            image_modality=image_modality,
+                            worker_count=worker_count):
+                        reference_network = copy.deepcopy(base_network)
+                        compatible_network = copy.deepcopy(base_network)
+                        torch.set_rng_state(initial_rng)
+                        reference = _run_legacy_reference(
+                            reference_network,train_paths,test_paths,
+                            epochs,batch_size)
+                        reference_rng = torch.get_rng_state().clone()
+
+                        run_path = os.path.join(
+                            temp_dir,f"{image_modality}-{worker_count}")
+                        os.makedirs(run_path)
+                        torch.set_rng_state(initial_rng)
+                        network_path = os.path.join(
+                            run_path,f"commNet_{image_modality}.pt")
+                        student = SimpleNamespace(
+                            name="student",
+                            path=run_path,
+                            policy=SimpleNamespace(
+                                networks={"commNet":compatible_network},
+                                network_paths={"commNet":network_path},
+                            ),
+                        )
+                        with (
+                            mock.patch.object(
+                                train_policy,"Pilot",return_value=student),
+                            mock.patch.object(
+                                train_policy,"get_data_paths",
+                                return_value=(train_paths,test_paths)),
+                            mock.patch.object(
+                                train_policy.torch.cuda,"is_available",
+                                return_value=False),
+                        ):
+                            train_student(
+                                "cohort","student","commNet",epochs,
+                                lim_sv=epochs,batch_size=batch_size,
+                                image_modality=image_modality,
+                                dataloader_num_workers=worker_count,
+                                numerical_mode="original")
+
+                        compatible_rng = torch.get_rng_state().clone()
+                        for expected,actual in zip(
+                                reference_network.parameters(),
+                                compatible_network.parameters()):
+                            self.assertTrue(torch.equal(expected,actual))
+                        self.assertTrue(torch.equal(
+                            reference_rng,compatible_rng))
+
+                        losses = torch.load(
+                            os.path.join(run_path,"losses_commNet.pt"),
+                            weights_only=False)
+                        entry = next(iter(losses.values()))
+                        np.testing.assert_array_equal(
+                            reference["Loss_tn"],entry["Loss_tn"])
+                        np.testing.assert_array_equal(
+                            reference["Loss_tt"],entry["Loss_tt"])
+                        self.assertEqual(reference["Nd_tn"],entry["Nd_tn"])
+                        self.assertEqual(reference["Nd_tt"],entry["Nd_tt"])
+                        self.assertEqual(entry["numerical_mode"],"original")
+                        self.assertEqual(entry["image_modality"],image_modality)
+                        self.assertEqual(entry["Eval_tte"].shape,(0,2))
+
+    def test_original_commnet_deployment_selects_best_checkpoint(self):
+        batch_size,epochs = 2,2
+        samples = [
+            {
+                "rgb_image":torch.arange(
+                    index*4,(index+1)*4,dtype=torch.float32
+                ).reshape(1,1,2,2)/20,
+                "feature_vector":torch.tensor(
+                    [[index/11,(index+1)/13]],dtype=torch.float32),
+            }
+            for index in range(6)
+        ]
+        labels = [
+            {"command":torch.tensor(
+                [[index/5,(index+1)/7,(index+2)/9,(index+3)/11]],
+                dtype=torch.float32)}
+            for index in range(6)
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = os.path.join(temp_dir,"observations.pt")
+            torch.save({"Xnn":samples,"Ynn":labels},data_path)
+            network = _TinyCommNet()
+            network_path = os.path.join(temp_dir,"commNet_rgb.pt")
+            student = SimpleNamespace(
+                name="student",
+                path=temp_dir,
+                policy=SimpleNamespace(
+                    networks={"commNet":network},
+                    network_paths={"commNet":network_path},
+                ),
+            )
+            deployed_states = []
+            metrics = [9.0,2.0,5.0]
+
+            def deploy(*args,**kwargs):
+                deployed_states.append(copy.deepcopy(network.state_dict()))
+                value = metrics[len(deployed_states)-1]
+                return {"student":{"TTE":{"mean":value}}}
+
+            with (
+                mock.patch.object(train_policy,"Pilot",return_value=student),
+                mock.patch.object(
+                    train_policy,"get_data_paths",
+                    return_value=([data_path],[data_path])),
+                mock.patch.object(
+                    train_policy.torch.cuda,"is_available",return_value=False),
+                mock.patch.object(
+                    train_policy.df,"deploy_roster",side_effect=deploy) as deploy_mock,
+                mock.patch.object(train_policy.ru.console,"print"),
+            ):
+                train_student(
+                    "cohort","student","commNet",epochs,
+                    deployment=("course","scene","method"),
+                    lim_sv=1,batch_size=batch_size,
+                    numerical_mode="original")
+
+            self.assertEqual(deploy_mock.call_count,3)
+            for call in deploy_mock.call_args_list:
+                self.assertEqual(call.args[:5],(
+                    "cohort","course","scene","method",["student"]))
+                self.assertEqual(call.kwargs["mode"],"evaluate")
+                self.assertEqual(call.kwargs["image_modality"],"rgb")
+                self.assertFalse(call.kwargs["require_commnet_weights"])
+
+            losses = torch.load(
+                os.path.join(temp_dir,"losses_commNet.pt"),
+                weights_only=False)
+            entry = next(iter(losses.values()))
+            np.testing.assert_array_equal(
+                entry["Eval_tte"],np.array([[0,1,2],[9.0,2.0,5.0]]))
+
+            selected_network = torch.load(network_path,weights_only=False)
+            for name,value in selected_network.state_dict().items():
+                self.assertTrue(torch.equal(value,deployed_states[1][name]))
+            self.assertFalse(os.path.exists(
+                os.path.join(temp_dir,"ckpts","commNet_rgb")))
 
     def test_nested_batch_moves_without_changing_container_structure(self):
         batch = {
