@@ -7,6 +7,11 @@ from typing import Callable
 
 import numpy as np
 
+from sousvide.synthesize.event_surfaces import (
+    EventModality,create_event_surface,resolve_event_surface_options,
+    validate_event_modalities,
+)
+
 
 MIN_EVENTS_PER_IMAGE = 10
 
@@ -56,7 +61,7 @@ def _rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
 
 
 class V2ERolloutRecorder:
-    """Stream rendered frames through v2e and collect fixed-window images."""
+    """Stream rendered frames through v2e and collect aligned event images."""
 
     def __init__(
         self,
@@ -65,22 +70,42 @@ class V2ERolloutRecorder:
         emulator_factory: Callable[..., object] | None = None,
         device: str | None = None,
         retain_images: bool = True,
+        event_modalities: tuple[EventModality, ...] | list[EventModality] | None = None,
+        event_surface_options: dict[str,dict] | None = None,
     ) -> None:
         self.h5_path = h5_path
         self.expected_windows = expected_windows
         self.emulator_factory = emulator_factory
         self.device = device
         self.retain_images = retain_images
+        self.event_modalities = validate_event_modalities(
+            ("kronecker_delta",)
+            if event_modalities is None else event_modalities)
+        self.event_surface_options = resolve_event_surface_options(
+            self.event_modalities,event_surface_options)
+        self.output_modality = self.event_modalities[0]
         self.emulator = None
         self.height = None
         self.width = None
         self.window_events: list[np.ndarray] = []
-        self.images: list[np.ndarray] = []
+        self.surfaces = {}
+        self.images_by_modality = {
+            modality:[] for modality in self.event_modalities}
+        # Preserve the legacy attribute for callers that inspect it directly.
+        self.images = self.images_by_modality[self.output_modality]
+        self._closed_images = None
         self.window_count = 0
         self.closed = False
 
     def _start(self, rgb: np.ndarray) -> None:
         self.height, self.width = rgb.shape[:2]
+        self.surfaces = {
+            modality:create_event_surface(
+                modality,self.height,self.width,
+                self.event_surface_options[modality])
+            for modality in self.event_modalities
+            if modality != "kronecker_delta"
+        }
         if self.h5_path is None:
             output_folder,dvs_h5 = None,None
         else:
@@ -128,24 +153,42 @@ class V2ERolloutRecorder:
 
         events = self.emulator.generate_events(gray, float(timestamp))
         if events is not None and len(events):
-            self.window_events.append(np.asarray(events))
+            events = np.asarray(events)
+            if "kronecker_delta" in self.event_modalities:
+                self.window_events.append(events)
+            for surface in self.surfaces.values():
+                surface.update(events)
 
         # Closing after accumulation includes events exactly on the upper bound.
         image = None
         if close_window:
-            combined = (
-                np.concatenate(self.window_events, axis=0)
-                if self.window_events
-                else None
-            )
-            image = events_to_kronecker(combined, self.height, self.width)
+            boundary_images = {}
+            if "kronecker_delta" in self.event_modalities:
+                combined = (
+                    np.concatenate(self.window_events, axis=0)
+                    if self.window_events
+                    else None
+                )
+                boundary_images["kronecker_delta"] = events_to_kronecker(
+                    combined,self.height,self.width)
+            for modality,surface in self.surfaces.items():
+                boundary_images[modality] = surface.snapshot()
+            image = boundary_images[self.output_modality]
             if self.retain_images:
-                self.images.append(image)
+                for modality,boundary_image in boundary_images.items():
+                    self.images_by_modality[modality].append(boundary_image)
             self.window_count += 1
             self.window_events.clear()
         return image
 
     def close(self) -> np.ndarray | None:
+        images = self.close_all()
+        if images is None:
+            return None
+        return images[self.output_modality]
+
+    def close_all(self) -> dict[EventModality,np.ndarray] | None:
+        """Close v2e and return every retained, aligned event representation."""
         if not self.closed:
             if self.emulator is not None:
                 self.emulator.cleanup()
@@ -159,7 +202,12 @@ class V2ERolloutRecorder:
             )
         if not self.retain_images:
             return None
-        return np.stack(self.images, axis=0).astype(np.uint8, copy=False)
+        if self._closed_images is None:
+            self._closed_images = {
+                modality:np.stack(images,axis=0).astype(np.uint8,copy=False)
+                for modality,images in self.images_by_modality.items()
+            }
+        return self._closed_images
 
     def abort(self) -> None:
         """Close v2e and remove a rollout that was rejected or failed."""
@@ -171,9 +219,13 @@ class V2ERolloutRecorder:
 
 
 class OnlineEventImageGenerator(V2ERolloutRecorder):
-    """Generate aligned Kronecker images in memory without event persistence."""
+    """Generate one selected event-image modality without file persistence."""
 
-    def __init__(self,expected_windows:int,device:str|None=None) -> None:
+    def __init__(self,expected_windows:int,device:str|None=None,
+                 image_modality:EventModality="kronecker_delta",
+                 event_surface_options:dict[str,dict]|None=None) -> None:
         super().__init__(
             h5_path=None,expected_windows=expected_windows,
-            device=device,retain_images=False)
+            device=device,retain_images=False,
+            event_modalities=(image_modality,),
+            event_surface_options=event_surface_options)

@@ -58,6 +58,11 @@ class ModalityNetworkWeightTests(unittest.TestCase):
             network_factory.get_network_path(
                 pilot_path,"commNet","kronecker_delta"),
             os.path.join(pilot_path,"commNet_kronecker_delta.pt"))
+        for modality in ("event_bin","event_eros","event_tos"):
+            self.assertEqual(
+                network_factory.get_network_path(
+                    pilot_path,"commNet",modality),
+                os.path.join(pilot_path,f"commNet_{modality}.pt"))
         self.assertEqual(
             network_factory.get_network_path(
                 pilot_path,"histNet","kronecker_delta"),

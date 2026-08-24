@@ -34,6 +34,7 @@ from sousvide.control.network_factory import (  # noqa: E402
     generate_network,
     get_network_load_path,
 )
+from sousvide.synthesize.image_modality import IMAGE_MODALITIES  # noqa: E402
 
 
 NETWORK_NAMES = ("histNet", "commNet")
@@ -67,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--image-modality",
-        choices=("rgb", "kronecker_delta"),
+        choices=IMAGE_MODALITIES,
         default="kronecker_delta",
         help="CommNet checkpoint modality (default: kronecker_delta).",
     )

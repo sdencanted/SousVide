@@ -12,7 +12,8 @@ from sousvide.control.networks.feature_extractors import (
     DINO
 )
 from sousvide.control.networks.pave import Pave
-from sousvide.synthesize.image_modality import ImageModality,validate_image_modality
+from sousvide.synthesize.image_modality import (
+    IMAGE_MODALITIES,ImageModality,validate_image_modality)
 
 
 def get_network_path(
@@ -53,7 +54,7 @@ def _get_legacy_commnet_modality(pilot_path:str) -> ImageModality:
             losses = torch.load(losses_path,weights_only=False)
             for loss_entry in reversed(list(losses.values())):
                 modality = loss_entry.get("image_modality")
-                if modality in ("rgb","kronecker_delta"):
+                if modality in IMAGE_MODALITIES:
                     return modality
         except (AttributeError,EOFError,RuntimeError,TypeError,ValueError):
             pass

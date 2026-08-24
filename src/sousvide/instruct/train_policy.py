@@ -23,7 +23,8 @@ from sousvide.instruct.losses import LossFn
 from sousvide.instruct.synthesized_data import (
     generate_dataset,generate_grouped_dataset,get_data_paths)
 from sousvide.synthesize.image_modality import (
-    ImageModality,validate_image_modality)
+    ImageModality,is_event_modality,validate_image_modality)
+from sousvide.synthesize.event_surfaces import resolve_event_surface_options
 
 
 CompileMode = Literal["none","default","reduce-overhead"]
@@ -311,7 +312,8 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
                  precision:Precision="float32",
                  persistent_dataloader:bool=False,
                  cuda_prefetch:bool=False,seed:int=0,
-                 numerical_mode:NumericalMode="modern"):
+                 numerical_mode:NumericalMode="modern",
+                 event_surface_options:dict[str,dict]|None=None):
     image_modality = validate_image_modality(image_modality)
     _validate_dataloader_num_workers(dataloader_num_workers)
     _validate_runtime_options(compile_mode,precision,regen)
@@ -356,6 +358,7 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
                 persistent_dataloader=persistent_dataloader,
                 cuda_prefetch=cuda_prefetch,seed=seed,
                 numerical_mode=numerical_mode,
+                event_surface_options=event_surface_options,
                 observation_generation_seconds=observation_generation_seconds)
             progress.refresh()
 
@@ -371,8 +374,13 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                   persistent_dataloader:bool=False,
                   cuda_prefetch:bool=False,seed:int=0,
                   numerical_mode:NumericalMode="modern",
+                  event_surface_options:dict[str,dict]|None=None,
                   observation_generation_seconds:float=0.0) -> None:
     image_modality = validate_image_modality(image_modality)
+    resolved_event_surface_options = (
+        resolve_event_surface_options(
+            (image_modality,),event_surface_options)
+        if is_event_modality(image_modality) else {})
     _validate_dataloader_num_workers(dataloader_num_workers)
     _validate_runtime_options(compile_mode,precision,False)
     _validate_numerical_mode_options(
@@ -437,6 +445,7 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
             metric = df.deploy_roster(
                 cohort_name,course,scene,eval_method,[student_name],
                 mode="evaluate",image_modality=image_modality,
+                event_surface_options=resolved_event_surface_options,
                 require_commnet_weights=numerical_mode != "original")
         setup_timings["initial_deployment_seconds"] = (
             time.perf_counter()-deployment_start)
@@ -495,6 +504,8 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
 
     loss_entry = {
         "network":network_name,"image_modality":image_modality,
+        "event_surface_config":resolved_event_surface_options.get(
+            image_modality,{}),
         "numerical_mode":numerical_mode,
         "compile_mode":compile_mode,"precision":precision,
         "batch_size":batch_size,
@@ -638,6 +649,7 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                     metric = df.deploy_roster(
                         cohort_name,course,scene,eval_method,[student_name],
                         mode="evaluate",image_modality=image_modality,
+                        event_surface_options=resolved_event_surface_options,
                         require_commnet_weights=numerical_mode != "original")
                 deployment_seconds = time.perf_counter()-deployment_start
                 Eval_tte.append(

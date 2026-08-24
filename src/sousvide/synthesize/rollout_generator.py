@@ -1,6 +1,8 @@
+import errno
 import numpy as np
 import os
 import re
+import shutil
 import tempfile
 import torch
 from concurrent.futures import ProcessPoolExecutor
@@ -14,6 +16,10 @@ import sousvide.synthesize.data_compress_helper as dch
 from sousvide.synthesize.alignment import validate_aligned_rollouts
 from sousvide.synthesize.event_generator import V2ERolloutRecorder
 from sousvide.synthesize.event_simulator import EventSimulator
+from sousvide.synthesize.event_surfaces import (
+    resolve_event_surface_options,validate_event_modalities,
+)
+from sousvide.synthesize.image_modality import modality_storage
 from sousvide.synthesize.parallel_event_generator import (
     EventFrameBuffer,
     process_buffered_rollout,
@@ -26,12 +32,55 @@ from figs.dynamics.external_forces import ExternalForces
 from figs.tsplines.min_time_snap import MinTimeSnap
 from figs.control.vehicle_rate_mpc import VehicleRateMPC
 
+
+def _replace_staged_file(staged_path:str,final_path:str) -> None:
+    """Replace final_path, including when the paths are on different filesystems."""
+    try:
+        os.replace(staged_path,final_path)
+        return
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+
+    destination_dir = os.path.dirname(final_path)
+    descriptor,temporary_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(final_path)}.",
+        suffix=".tmp",
+        dir=destination_dir,
+    )
+    os.close(descriptor)
+    try:
+        shutil.copy2(staged_path,temporary_path)
+        os.replace(temporary_path,final_path)
+    except Exception:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+        raise
+    os.unlink(staged_path)
+
+
+def _resolve_requested_event_modalities(
+        generate_events:bool,event_modalities,event_surface_options):
+    if event_modalities is None:
+        if not generate_events:
+            return (),{}
+        event_modalities = ("kronecker_delta",)
+    elif not isinstance(event_modalities,str):
+        event_modalities = tuple(event_modalities)
+        if not event_modalities and not generate_events:
+            return (),{}
+    modalities = validate_event_modalities(event_modalities)
+    return modalities,resolve_event_surface_options(
+        modalities,event_surface_options)
+
 def generate_rollout_data(cohort_name:str,course_names:list[str],
                           gsplat_name:str,method_name:str,
                           expert_name:str="Viper",bframe_name:str="carl",
                           Nro_ds:int=50,use_compress:bool=False,
                           generate_events:bool=False,
-                          event_workers:int=1) -> None:
+                          event_workers:int=1,
+                          event_modalities=None,
+                          event_surface_options:dict[str,dict]|None=None) -> None:
     
     """
     Generates rollout data for a given cohort. The rollout data comprises a set of courses
@@ -49,8 +98,10 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
         bframe_name:    Base frame for flying the trajectories (default is carl).
         Nro_sv:         Number of rollouts per save.
         use_compress:   Compress the image data.
-        generate_events: Generate v2e H5 files and aligned Kronecker images.
+        generate_events: Generate legacy v2e H5 and Kronecker images.
         event_workers:  Number of CPU processes used for v2e (default 1).
+        event_modalities: Event image representations generated from one v2e stream.
+        event_surface_options: Per-modality EROS/TOS parameter overrides.
 
     Returns:
         None:           (flight data saved to cohort directory)
@@ -59,6 +110,10 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
     # Initialize the progress variables
     if event_workers < 1:
         raise ValueError("event_workers must be at least 1.")
+    active_event_modalities,resolved_surface_options = (
+        _resolve_requested_event_modalities(
+            generate_events,event_modalities,event_surface_options))
+    event_enabled = bool(active_event_modalities)
 
     progress = ru.get_generation_progress()
     subunits = "dpts"
@@ -82,7 +137,7 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
         sample_task = progress.add_task(sample_desc1,total=None,units='samples')
 
         # Initialize the simulator
-        simulator = EventSimulator(gsplat,method) if generate_events else Simulator(gsplat,method)
+        simulator = EventSimulator(gsplat,method) if event_enabled else Simulator(gsplat,method)
 
         # Cycle through the courses
         for course_name in course_names:
@@ -142,15 +197,17 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
                         Frames,Perturbations,
                         dt_ro,method["tol_select"],
                         idx_bt,sample_bar,
-                        generate_events=generate_events,
+                        generate_events=event_enabled,
+                        event_modalities=active_event_modalities,
+                        event_surface_options=resolved_surface_options,
                         event_staging_dir=event_staging_dir,
                         event_workers=event_workers)
 
-                    if generate_events:
-                        Trajectories,Images,KroneckerImages,EventPaths = rollout_data
+                    if event_enabled:
+                        Trajectories,Images,EventImages,EventPaths = rollout_data
                     else:
                         Trajectories,Images = rollout_data
-                        KroneckerImages,EventPaths = None,None
+                        EventImages,EventPaths = None,None
 
                     progress.update(sample_task,description=sample_desc2)
                     progress.refresh()
@@ -158,7 +215,8 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
                     save_rollouts(cohort_name,course_name,
                                 Trajectories,Images,
                                 idx_bt,use_compress,
-                                KroneckerImages,EventPaths)
+                                EventPaths=EventPaths,
+                                EventImagesByModality=EventImages)
 
                 # Update the data count
                 Ndata += sum([trajectory["Ndata"] for trajectory in Trajectories])
@@ -178,26 +236,40 @@ def generate_rollouts(
         idx_set:int,progress_bar:tuple[ru.Progress,int]=None,
         debug:bool=False,generate_events:bool=False,
         event_staging_dir:str|None=None,
-        event_workers:int=1
+        event_workers:int=1,
+        event_modalities=None,
+        event_surface_options:dict[str,dict]|None=None,
         ):
     """Generate rollouts, optionally processing accepted event streams in parallel."""
     if event_workers < 1:
         raise ValueError("event_workers must be at least 1.")
 
+    legacy_event_return = generate_events and event_modalities is None
+    active_event_modalities,resolved_surface_options = (
+        _resolve_requested_event_modalities(
+            generate_events,event_modalities,event_surface_options))
+    event_enabled = bool(active_event_modalities)
     kwargs = dict(
         simulator=simulator,controller=controller,tXUd=tXUd,bframe=bframe,
         Frames=Frames,Perturbations=Perturbations,dt_ro=dt_ro,
         tol_select=tol_select,idx_set=idx_set,progress_bar=progress_bar,
-        debug=debug,generate_events=generate_events,
+        debug=debug,generate_events=event_enabled,
+        event_modalities=active_event_modalities,
+        event_surface_options=resolved_surface_options,
         event_staging_dir=event_staging_dir,event_workers=event_workers,
     )
-    if generate_events and event_workers > 1:
+    if event_enabled and event_workers > 1:
         # Spawn avoids inheriting the already initialized CUDA/GSplat state.
         with ProcessPoolExecutor(
             max_workers=event_workers,mp_context=get_context("spawn")
         ) as event_pool:
-            return _generate_rollouts_impl(**kwargs,event_pool=event_pool)
-    return _generate_rollouts_impl(**kwargs,event_pool=None)
+            result = _generate_rollouts_impl(**kwargs,event_pool=event_pool)
+    else:
+        result = _generate_rollouts_impl(**kwargs,event_pool=None)
+    if legacy_event_return:
+        trajectories,images,event_images,event_paths = result
+        return trajectories,images,event_images["kronecker_delta"],event_paths
+    return result
 
 
 def _generate_rollouts_impl(
@@ -209,6 +281,8 @@ def _generate_rollouts_impl(
         event_staging_dir:str|None=None,
         event_workers:int=1,
         event_pool:ProcessPoolExecutor|None=None,
+        event_modalities=(),
+        event_surface_options:dict[str,dict]|None=None,
         ):
     """
     Generates rollout data for the quadcopter given a list of drones and initial states (perturbations).
@@ -241,7 +315,8 @@ def _generate_rollouts_impl(
     
     # Initialize rollout variables
     Trajectories,Images = [],[]
-    KroneckerImages,EventPaths = [],[]
+    EventImages = {modality:[] for modality in event_modalities}
+    EventPaths = []
 
     if generate_events and event_staging_dir is None:
         raise ValueError("event_staging_dir is required when generate_events=True.")
@@ -280,13 +355,16 @@ def _generate_rollouts_impl(
                 event_buffer = EventFrameBuffer()
                 event_callback = event_buffer.process_frame
             else:
-                recorder = V2ERolloutRecorder(staged_h5,expected_windows)
+                recorder = V2ERolloutRecorder(
+                    staged_h5,expected_windows,
+                    event_modalities=event_modalities,
+                    event_surface_options=event_surface_options)
                 event_callback = recorder.process_frame
             try:
                 Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol = simulator.simulate_with_events(
                     controller,t0,tf,x0,event_callback,warmup_steps)
                 if recorder is not None:
-                    Kronecker = recorder.close()
+                    generated_event_images = recorder.close_all()
             except Exception:
                 if recorder is not None:
                     recorder.abort()
@@ -321,18 +399,23 @@ def _generate_rollouts_impl(
             if generate_events and parallel_events:
                 frame_path = os.path.join(
                     event_staging_dir,rollout_id+".frames.npy")
-                kronecker_path = os.path.join(
-                    event_staging_dir,rollout_id+".kronecker.npy")
+                output_paths = {
+                    modality:os.path.join(
+                        event_staging_dir,rollout_id+f".{modality}.npy")
+                    for modality in event_modalities}
                 timestamps,close_windows = event_buffer.save(frame_path)
                 future = event_pool.submit(
                     process_buffered_rollout,
                     frame_path,timestamps,close_windows,staged_h5,
-                    kronecker_path,expected_windows)
+                    next(iter(output_paths.values())),expected_windows,
+                    event_modalities,event_surface_options,output_paths)
                 event_jobs.append((
-                    rollout_id,future,frame_path,kronecker_path,staged_h5))
+                    rollout_id,future,frame_path,output_paths,staged_h5))
             elif generate_events:
-                KroneckerImages.append({
-                    "kronecker_delta":Kronecker,"rollout_id":rollout_id})
+                for modality,event_stack in generated_event_images.items():
+                    EventImages[modality].append({
+                        modality:event_stack,"rollout_id":rollout_id,
+                        "event_surface_config":event_surface_options[modality]})
                 EventPaths.append(staged_h5)
 
             # Update the progress bar
@@ -357,22 +440,26 @@ def _generate_rollouts_impl(
     if parallel_events:
         worker_error = None
         completed_jobs = []
-        for rollout_id,future,frame_path,kronecker_path,staged_h5 in event_jobs:
+        for rollout_id,future,frame_path,output_paths,staged_h5 in event_jobs:
             try:
-                completed_kronecker,completed_h5 = future.result()
+                completed_outputs,completed_h5 = future.result()
                 completed_jobs.append((
                     rollout_id,
-                    np.load(completed_kronecker,allow_pickle=False),
+                    {
+                        modality:np.load(path,allow_pickle=False)
+                        for modality,path in completed_outputs.items()
+                    },
                     completed_h5))
             except Exception as error:
                 if worker_error is None:
                     worker_error = error
 
-        for _,_,frame_path,kronecker_path,_ in event_jobs:
+        for _,_,frame_path,output_paths,_ in event_jobs:
             if os.path.isfile(frame_path):
                 os.unlink(frame_path)
-            if os.path.isfile(kronecker_path):
-                os.unlink(kronecker_path)
+            for output_path in output_paths.values():
+                if os.path.isfile(output_path):
+                    os.unlink(output_path)
 
         if worker_error is not None:
             for *_,staged_h5 in event_jobs:
@@ -380,13 +467,15 @@ def _generate_rollouts_impl(
                     os.unlink(staged_h5)
             raise worker_error
 
-        for rollout_id,kronecker,staged_h5 in completed_jobs:
-            KroneckerImages.append({
-                "kronecker_delta":kronecker,"rollout_id":rollout_id})
+        for rollout_id,generated_event_images,staged_h5 in completed_jobs:
+            for modality,event_stack in generated_event_images.items():
+                EventImages[modality].append({
+                    modality:event_stack,"rollout_id":rollout_id,
+                    "event_surface_config":event_surface_options[modality]})
             EventPaths.append(staged_h5)
 
     if generate_events:
-        return Trajectories,Images,KroneckerImages,EventPaths
+        return Trajectories,Images,EventImages,EventPaths
     return Trajectories,Images
 
 def save_rollouts(cohort_name:str,course_name:str,
@@ -395,7 +484,8 @@ def save_rollouts(cohort_name:str,course_name:str,
                   stack_id:str|int,
                   use_compress:bool=False,
                   KroneckerImages:list[dict]|None=None,
-                  EventPaths:list[str]|None=None) -> None:
+                  EventPaths:list[str]|None=None,
+                  EventImagesByModality:dict[str,list[dict]]|None=None) -> None:
     """
     Saves the rollout data to a .pt file in folders corresponding to coursename within the cohort 
     directory. The rollout data is stored as a list of rollout dictionaries of size stack_size for
@@ -421,47 +511,68 @@ def save_rollouts(cohort_name:str,course_name:str,
     dset_path = os.path.join(cohort_path,"rollout_data",course_name)
     traj_course_path = os.path.join(dset_path,"trajectories")
     imgs_course_path = os.path.join(dset_path,"images")
-    kron_course_path = os.path.join(dset_path,"kronecker")
     events_course_path = os.path.join(dset_path,"events")
+
+    if EventImagesByModality is not None and KroneckerImages is not None:
+        raise ValueError(
+            "Pass either KroneckerImages or EventImagesByModality, not both.")
+    if EventImagesByModality is None and KroneckerImages is not None:
+        EventImagesByModality = {"kronecker_delta":KroneckerImages}
 
     if not os.path.exists(traj_course_path):
         os.makedirs(traj_course_path)
     
     if not os.path.exists(imgs_course_path):
         os.makedirs(imgs_course_path)
-    if KroneckerImages is not None:
-        os.makedirs(kron_course_path,exist_ok=True)
+    if EventImagesByModality is not None:
+        for modality in EventImagesByModality:
+            folder,_ = modality_storage(modality)
+            os.makedirs(os.path.join(dset_path,folder),exist_ok=True)
         os.makedirs(events_course_path,exist_ok=True)
 
     # Save the stacks
     dset_name = str(stack_id+1).zfill(3) if type(stack_id) == int else str(stack_id)
     traj_path = os.path.join(traj_course_path,"trajectories"+dset_name+".pt")
     imgs_path = os.path.join(imgs_course_path,"images"+dset_name+".pt")
-    kron_path = os.path.join(kron_course_path,"kronecker"+dset_name+".pt")
 
     assert all(isinstance(x["rgb"], np.ndarray) for x in Images)
     assert all(isinstance(x["depth"], np.ndarray) for x in Images)
-    if KroneckerImages is not None:
-        validate_aligned_rollouts(Trajectories,Images,KroneckerImages)
-        if EventPaths is None or len(EventPaths) != len(KroneckerImages):
-            raise ValueError("Each accepted Kronecker rollout must have one staged H5 file.")
+    if EventImagesByModality is not None:
+        if not EventImagesByModality:
+            raise ValueError("EventImagesByModality must not be empty.")
+        lengths = set()
+        for modality,event_images in EventImagesByModality.items():
+            validate_aligned_rollouts(
+                Trajectories,Images,event_images,image_modality=modality)
+            lengths.add(len(event_images))
+        if len(lengths) != 1:
+            raise ValueError("Event modality rollout counts do not match.")
+        event_count = lengths.pop()
+        if EventPaths is None or len(EventPaths) != event_count:
+            raise ValueError(
+                "Each accepted event rollout must have one staged H5 file.")
     if use_compress:
         Images = dch.compress_data(Images,key="rgb")
-        if KroneckerImages is not None:
-            KroneckerImages = dch.compress_data(KroneckerImages,key="kronecker_delta")
+        if EventImagesByModality is not None:
+            for modality,event_images in EventImagesByModality.items():
+                dch.compress_data(event_images,key=modality)
     # Protocol 4 represents binary image buffers as bytes rather than text.
     # This avoids UTF-8 decoding failures for pixel values above 0x7f.
     torch.save(Trajectories, traj_path, pickle_protocol=4)
     torch.save(Images, imgs_path, pickle_protocol=4)
-    if KroneckerImages is not None:
-        torch.save(KroneckerImages,kron_path,pickle_protocol=4)
+    if EventImagesByModality is not None:
+        for modality,event_images in EventImagesByModality.items():
+            folder,prefix = modality_storage(modality)
+            event_stack_path = os.path.join(
+                dset_path,folder,prefix+dset_name+".pt")
+            torch.save(event_images,event_stack_path,pickle_protocol=4)
 
-        accepted_ids = {rollout["rollout_id"] for rollout in KroneckerImages}
+        reference_images = next(iter(EventImagesByModality.values()))
+        accepted_ids = {rollout["rollout_id"] for rollout in reference_images}
         stack_pattern = re.compile(rf"^{re.escape(dset_name)}\d{{3}}\.h5$")
         for filename in os.listdir(events_course_path):
             if stack_pattern.fullmatch(filename) and filename[:-3] not in accepted_ids:
                 os.unlink(os.path.join(events_course_path,filename))
-        for staged_path,rollout in zip(EventPaths,KroneckerImages):
+        for staged_path,rollout in zip(EventPaths,reference_images):
             final_path = os.path.join(events_course_path,rollout["rollout_id"]+".h5")
-            os.replace(staged_path,final_path)
-
+            _replace_staged_file(staged_path,final_path)

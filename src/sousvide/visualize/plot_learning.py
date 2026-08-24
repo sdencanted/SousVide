@@ -6,14 +6,18 @@ import torch
 import sousvide.visualize.plot_3D as p3
 import sousvide.visualize.rich_utilities as ru
 import sousvide.flight.flight_helper as fh
+from sousvide.synthesize.image_modality import validate_image_modality
 
 from typing import List
 
 def plot_losses(cohort_name:str, roster:List[str], network_name:str,
-                Nln:int=70,use_log:bool=True):
+                Nln:int=70,use_log:bool=True,image_modality:str|None=None):
     """
     Plot the losses for each student in the roster.
     """
+
+    if image_modality is not None:
+        image_modality = validate_image_modality(image_modality)
 
     # Initialize the rich variables
     console = ru.get_console()
@@ -52,6 +56,9 @@ def plot_losses(cohort_name:str, roster:List[str], network_name:str,
         Nd_tn, Nd_tt, T_tn = [], [], []
         Neps_tot = 0
         for loss_data in losses.values():
+            if (image_modality is not None and
+                    loss_data.get("image_modality","rgb") != image_modality):
+                continue
             # Extract the loss data
             loss_tn,loss_tt = loss_data["Loss_tn"],loss_data["Loss_tt"]
             if np.any(loss_data["Eval_tte"]):
@@ -80,6 +87,12 @@ def plot_losses(cohort_name:str, roster:List[str], network_name:str,
             T_tn.append(loss_data["t_tn"])
 
         # Compile the student plot data
+        if Neps_tot == 0:
+            learning_summary += (
+                f"Student [bold cyan]{student}[/] has no {network_name} "
+                f"losses for [bold cyan]{image_modality}[/].\n")
+            continue
+
         student_data[student] = {
             "Train": Loss_tn,
             "Test": Loss_tt,

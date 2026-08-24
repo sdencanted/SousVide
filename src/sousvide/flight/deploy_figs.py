@@ -19,7 +19,9 @@ from figs.dynamics.external_forces import ExternalForces
 from sousvide.control.pilot import Pilot
 from sousvide.synthesize.event_generator import OnlineEventImageGenerator
 from sousvide.synthesize.event_simulator import EventSimulator
-from sousvide.synthesize.image_modality import ImageModality,validate_image_modality
+from sousvide.synthesize.image_modality import (
+    ImageModality,is_event_modality,validate_image_modality)
+from sousvide.synthesize.event_surfaces import resolve_event_surface_options
 
 
 class _NotebookPolicyDebugView:
@@ -60,7 +62,7 @@ class _NotebookPolicyDebugView:
 
         # Kronecker images are repeated to three channels for the network. Show
         # the single grayscale plane so their event structure is unambiguous.
-        display_image = image[...,0] if image_modality == "kronecker_delta" else image
+        display_image = image[...,0] if is_event_modality(image_modality) else image
         thrust = command[0]
         rates = command[1:4]
 
@@ -68,7 +70,7 @@ class _NotebookPolicyDebugView:
             (self._figure,
              (self._image_axis,self._thrust_axis,self._rate_axis)) = self._plt.subplots(
                 1,3,figsize=(13,4),gridspec_kw={"width_ratios":[2,0.65,1]})
-            if image_modality == "kronecker_delta":
+            if is_event_modality(image_modality):
                 self._image_artist = self._image_axis.imshow(
                     display_image,cmap="gray",vmin=0,vmax=255)
             else:
@@ -95,7 +97,7 @@ class _NotebookPolicyDebugView:
             self._figure.tight_layout()
 
         self._image_artist.set_data(display_image)
-        if image_modality == "kronecker_delta":
+        if is_event_modality(image_modality):
             self._image_artist.set_cmap("gray")
             self._image_artist.set_clim(0,255)
         self._image_axis.set_title(
@@ -153,6 +155,7 @@ def deploy_roster(cohort_name:str,
                   show_table:bool=False,
                   image_modality:ImageModality="rgb",
                   event_device:Literal["auto","cpu","cuda"]="auto",
+                  event_surface_options:dict[str,dict]|None=None,
                   debug:bool=False,
                   require_commnet_weights:bool=True) -> Union[None,dict]:
     """"
@@ -174,6 +177,7 @@ def deploy_roster(cohort_name:str,
         show_table:     Boolean to print the summary table of flight metrics.
         image_modality: Visual input used by student pilots.
         event_device:   Device used for synchronous online v2e processing.
+        event_surface_options: Per-modality event-surface parameter overrides.
         debug:          Show each policy image, thrust, and body-rate output live in a notebook.
         require_commnet_weights: Reject student deployment when selected CommNet weights are missing.
 
@@ -182,6 +186,10 @@ def deploy_roster(cohort_name:str,
     """
 
     image_modality = validate_image_modality(image_modality)
+    resolved_surface_options = (
+        resolve_event_surface_options(
+            (image_modality,),event_surface_options)
+        if is_event_modality(image_modality) else {})
     if event_device not in ("auto","cpu","cuda"):
         raise ValueError("event_device must be 'auto', 'cpu', or 'cuda'.")
     if event_device == "cuda" and not torch.cuda.is_available():
@@ -239,13 +247,13 @@ def deploy_roster(cohort_name:str,
     # Initialize the simulator
     simulator = (
         EventSimulator(gsplat,method)
-        if image_modality == "kronecker_delta"
+        if is_event_modality(image_modality)
         else Simulator(gsplat,method)
     )
     simulator.update_forces(course["forces"])
     warmup_controller = (
         VehicleRateMPC(expert,expert_course)
-        if image_modality == "kronecker_delta"
+        if is_event_modality(image_modality)
         else None
     )
     debug_view = _NotebookPolicyDebugView() if debug or mode == "debug" else None
@@ -284,13 +292,15 @@ def deploy_roster(cohort_name:str,
                 warmup_controller.update_frame(frame)
 
             # Simulate Trajectory
-            if image_modality == "kronecker_delta":
+            if is_event_modality(image_modality):
                 online_events = None
                 callback = None
                 if pilot != "expert":
                     expected_windows = int(round(dt_ro*controller.hz))
                     online_events = OnlineEventImageGenerator(
-                        expected_windows,device=resolved_event_device)
+                        expected_windows,device=resolved_event_device,
+                        image_modality=image_modality,
+                        event_surface_options=resolved_surface_options)
                     callback = online_events.process_frame
 
                 try:

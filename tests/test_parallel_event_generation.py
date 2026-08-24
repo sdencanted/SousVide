@@ -14,6 +14,33 @@ from sousvide.synthesize.parallel_event_generator import (
 
 
 class ParallelEventGenerationTests(unittest.TestCase):
+    def test_worker_writes_multiple_surfaces_from_one_event_stream(self):
+        with tempfile.TemporaryDirectory() as folder:
+            frame_path = os.path.join(folder,"frames.npy")
+            h5_path = os.path.join(folder,"events.h5")
+            output_paths = {
+                modality:os.path.join(folder,f"{modality}.npy")
+                for modality in ("event_bin","event_eros","event_tos")}
+            frames = np.stack((
+                np.zeros((8,8),dtype=np.uint8),
+                np.full((8,8),255,dtype=np.uint8),
+            ))
+            np.save(frame_path,frames,allow_pickle=False)
+            completed,completed_h5 = process_buffered_rollout(
+                frame_path,(0.0,0.05),(False,True),h5_path,
+                next(iter(output_paths.values())),1,
+                tuple(output_paths),None,output_paths)
+
+            self.assertEqual(completed,output_paths)
+            self.assertEqual(completed_h5,h5_path)
+            self.assertFalse(os.path.exists(frame_path))
+            for path in completed.values():
+                images = np.load(path,allow_pickle=False)
+                self.assertEqual(images.shape,(1,8,8))
+                self.assertEqual(images.dtype,np.uint8)
+            with h5py.File(h5_path,"r") as event_file:
+                self.assertEqual(event_file["events"].shape[1],4)
+
     def test_frame_buffer_is_grayscale_and_disk_backed(self):
         buffer = EventFrameBuffer()
         rgb = np.zeros((4, 6, 3),dtype=np.uint8)

@@ -24,6 +24,34 @@ class RecordingPolicy:
 
 
 class OnlineEventDeploymentTests(unittest.TestCase):
+    def test_online_generator_selects_each_python_surface(self):
+        class FakeEmulator:
+            def __init__(self,**kwargs):
+                self.calls = 0
+
+            def generate_events(self,frame,timestamp):
+                self.calls += 1
+                if self.calls == 1:
+                    return None
+                return np.array([
+                    [timestamp,0,0,1], [timestamp,1,0,-1],
+                ],dtype=np.float32)
+
+            def cleanup(self):
+                pass
+
+        for modality in ("event_bin","event_eros","event_tos"):
+            generator = V2ERolloutRecorder(
+                None,1,emulator_factory=FakeEmulator,retain_images=False,
+                event_modalities=(modality,))
+            gray = np.zeros((2,3),dtype=np.uint8)
+            self.assertIsNone(generator.process_gray_frame(gray,0.0,False))
+            image = generator.process_gray_frame(gray,0.05,True)
+            self.assertEqual(image.shape,(2,3))
+            self.assertEqual(image.dtype,np.uint8)
+            self.assertTrue(image.any())
+            self.assertIsNone(generator.close())
+
     def test_debug_controller_reports_exact_policy_input_and_body_rates(self):
         class Controller:
             hz = 20

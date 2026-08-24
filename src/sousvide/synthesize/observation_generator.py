@@ -5,7 +5,7 @@ import torch
 import sousvide.synthesize.data_compress_helper as dch
 from sousvide.synthesize.image_modality import (
     ImageModality,get_aligned_stack_files,prepare_rollout_images,
-    validate_image_modality,
+    is_event_modality,validate_image_modality,
 )
 import sousvide.control.network_helper as nh
 import sousvide.visualize.rich_utilities as ru
@@ -244,7 +244,9 @@ def generate_observations(pilot:Pilot,
             "Ynn":Ynn,
             "Ndata":len(Xnn),
             "rollout_id":rollout_id,
-            "frame":frame
+            "frame":frame,
+            "image_modality":image_modality,
+            "event_surface_config":imgs_data.get("event_surface_config",{}),
         }
         Observations.append(observations)
 
@@ -293,7 +295,7 @@ def save_observations(cohort_name:str,course_name:str,
     for topic_name in syllabus:
         # Create the topic directory if it doesn't exist
         topic_parts = [cohort_path,"observation_data",pilot_name]
-        if image_modality == "kronecker_delta":
+        if is_event_modality(image_modality):
             topic_parts.append(image_modality)
         topic_parts.extend([topic_name,course_name])
         topic_path = os.path.join(*topic_parts)
@@ -309,11 +311,19 @@ def save_observations(cohort_name:str,course_name:str,
                 Xnn.append(xnn[topic_name])
                 Ynn.append(ynn[topic_name])
 
+        surface_configs = {
+            tuple(sorted(item.get("event_surface_config",{}).items()))
+            for item in Observations}
+        if len(surface_configs) != 1:
+            raise ValueError(
+                "Event surface configuration differs within an observation stack.")
         data = {
             "format_version":OBSERVATION_FORMAT_VERSION,
             "Xnn":stack_samples(Xnn),
             "Ynn":stack_samples(Ynn),
             "Ndata":len(Ynn),
+            "image_modality":image_modality,
+            "event_surface_config":dict(surface_configs.pop()),
         }
         
         torch.save(data,data_path)

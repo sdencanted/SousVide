@@ -10,15 +10,69 @@ from sousvide.synthesize.event_generator import (
     events_to_kronecker,
 )
 from sousvide.synthesize.event_simulator import EventSimulator
+from sousvide.synthesize.event_surfaces import (
+    BinaryEventSurface, EROSEventSurface, TOSEventSurface,
+    resolve_event_surface_options,
+)
+
+
+class EventSurfaceTests(unittest.TestCase):
+    def test_binary_surface_resets_at_each_snapshot(self):
+        surface = BinaryEventSurface(3,4)
+        events = np.array([
+            [0.0,0,0,1], [0.1,0,0,-1], [0.2,3,2,1],
+            [0.3,-1,0,1], [0.4,4,0,1],
+        ])
+        surface.update(events)
+        image = surface.snapshot()
+        self.assertEqual(image.dtype,np.uint8)
+        self.assertEqual(image.shape,(3,4))
+        self.assertEqual(image[0,0],255)
+        self.assertEqual(image[2,3],255)
+        self.assertEqual(np.count_nonzero(image),2)
+        self.assertFalse(surface.snapshot().any())
+
+    def test_eros_decays_local_region_and_persists_across_snapshots(self):
+        surface = EROSEventSurface(3,3,kernel_size=3,decay=0.125)
+        surface.update(np.array([[0.0,0,0,1],[0.1,1,0,-1]]))
+        image = surface.snapshot()
+        self.assertEqual(image[0,1],255)
+        self.assertEqual(image[0,0],127)
+        np.testing.assert_array_equal(surface.snapshot(),image)
+
+    def test_tos_prunes_and_orders_local_events(self):
+        surface = TOSEventSurface(3,3,kernel_size=3,parameter=1.0)
+        surface.update(np.array([
+            [0.0,0,0,1], [0.1,1,0,1], [0.2,2,0,1],
+            [0.3,1,0,1], [0.4,1,0,1], [0.5,1,0,1], [0.6,1,0,1],
+        ]))
+        image = surface.snapshot()
+        self.assertEqual(image[0,1],255)
+        self.assertEqual(image[0,2],251)
+        self.assertEqual(image[0,0],0)
+        np.testing.assert_array_equal(surface.snapshot(),image)
+
+    def test_surface_configuration_is_strict(self):
+        with self.assertRaisesRegex(ValueError,"positive odd"):
+            EROSEventSurface(3,3,kernel_size=4)
+        with self.assertRaisesRegex(ValueError,"closed interval"):
+            EROSEventSurface(3,3,decay=1.1)
+        with self.assertRaisesRegex(ValueError,"must not exceed"):
+            TOSEventSurface(3,3,kernel_size=255,parameter=2.0)
+        with self.assertRaisesRegex(ValueError,"unrequested"):
+            resolve_event_surface_options(
+                ("event_bin",),{"event_eros":{"decay":0.2}})
 
 
 class FakeEmulator:
     event_batches = []
+    instance = None
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.calls = []
         self.cleaned = False
+        FakeEmulator.instance = self
 
     def generate_events(self, frame, timestamp):
         self.calls.append((frame, timestamp))
@@ -29,6 +83,26 @@ class FakeEmulator:
 
 
 class EventImageTests(unittest.TestCase):
+    def test_one_v2e_stream_builds_multiple_event_modalities(self):
+        first = np.array([
+            [0.01,0,0,1], [0.02,1,0,-1], [0.03,1,0,1],
+        ],dtype=np.float32)
+        second = np.array([[0.05,2,0,1]],dtype=np.float32)
+        FakeEmulator.event_batches = [first,second]
+        recorder = V2ERolloutRecorder(
+            None,1,emulator_factory=FakeEmulator,
+            event_modalities=("event_bin","event_eros","event_tos"))
+        gray = np.zeros((2,3),dtype=np.uint8)
+        recorder.process_gray_frame(gray,0.01,False)
+        boundary = recorder.process_gray_frame(gray,0.05,True)
+        images = recorder.close_all()
+
+        self.assertEqual(boundary.dtype,np.uint8)
+        self.assertEqual(set(images),{"event_bin","event_eros","event_tos"})
+        self.assertTrue(all(value.shape == (1,2,3) for value in images.values()))
+        self.assertEqual(images["event_bin"][0,0,2],255)
+        self.assertEqual(len(FakeEmulator.instance.calls),2)
+
     def test_sparse_polarity_scaling_and_clipping(self):
         sparse = np.zeros((9, 4), dtype=np.float32)
         self.assertFalse(events_to_kronecker(sparse, 3, 4).any())

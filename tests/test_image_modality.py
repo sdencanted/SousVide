@@ -17,6 +17,9 @@ class CompressionTests(unittest.TestCase):
         for key, shape in (
             ("rgb", (2, 5, 7, 3)),
             ("kronecker_delta", (2, 5, 7)),
+            ("event_bin", (2, 5, 7)),
+            ("event_eros", (2, 5, 7)),
+            ("event_tos", (2, 5, 7)),
         ):
             original = rng.integers(0, 256, shape, dtype=np.uint8)
             data = [{key: original.copy(), "rollout_id": "001000"}]
@@ -27,6 +30,29 @@ class CompressionTests(unittest.TestCase):
 
 
 class ImageModalityTests(unittest.TestCase):
+    def test_each_event_modality_has_independent_storage_and_three_channels(self):
+        gray = np.arange(40,dtype=np.uint8).reshape(2,4,5)
+        trajectory = {"rollout_id":"001000","Ndata":2}
+        with tempfile.TemporaryDirectory() as course:
+            os.makedirs(os.path.join(course,"trajectories"))
+            with open(os.path.join(
+                    course,"trajectories","trajectories001.pt"),"wb"):
+                pass
+            for modality in ("event_bin","event_eros","event_tos"):
+                os.makedirs(os.path.join(course,modality))
+                path = os.path.join(course,modality,f"{modality}001.pt")
+                with open(path,"wb"):
+                    pass
+                aligned = get_aligned_stack_files(course,modality)
+                self.assertEqual(aligned,[(
+                    os.path.join(course,"trajectories","trajectories001.pt"),
+                    path)])
+                prepared = prepare_rollout_images(
+                    trajectory,
+                    {"rollout_id":"001000",modality:gray.copy()},modality)
+                self.assertEqual(prepared.shape,(2,4,5,3))
+                np.testing.assert_array_equal(prepared[...,0],gray)
+
     def test_kronecker_loader_selects_only_aligned_file_and_repeats_channels(self):
         with tempfile.TemporaryDirectory() as course:
             for folder in ("trajectories", "images", "kronecker"):

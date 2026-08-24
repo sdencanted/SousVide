@@ -10,7 +10,22 @@ import numpy as np
 import sousvide.synthesize.data_compress_helper as dch
 
 
-ImageModality = Literal["rgb", "kronecker_delta"]
+ImageModality = Literal[
+    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos"
+]
+
+IMAGE_MODALITIES: tuple[ImageModality, ...] = (
+    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos"
+)
+EVENT_IMAGE_MODALITIES = IMAGE_MODALITIES[1:]
+
+_MODALITY_STORAGE = {
+    "rgb": ("images", "images"),
+    "kronecker_delta": ("kronecker", "kronecker"),
+    "event_bin": ("event_bin", "event_bin"),
+    "event_eros": ("event_eros", "event_eros"),
+    "event_tos": ("event_tos", "event_tos"),
+}
 
 
 def kronecker_to_three_channels(image: np.ndarray) -> np.ndarray:
@@ -20,10 +35,26 @@ def kronecker_to_three_channels(image: np.ndarray) -> np.ndarray:
     return np.repeat(image[...,None],3,axis=-1)
 
 
+def event_image_to_three_channels(image: np.ndarray) -> np.ndarray:
+    """Repeat one grayscale event image for the existing RGB backbones."""
+    if image.ndim != 2:
+        raise ValueError("An event image must have shape (H,W).")
+    return np.repeat(image[...,None],3,axis=-1)
+
+
+def is_event_modality(image_modality: str) -> bool:
+    return image_modality in EVENT_IMAGE_MODALITIES
+
+
+def modality_storage(image_modality: ImageModality) -> tuple[str, str]:
+    image_modality = validate_image_modality(image_modality)
+    return _MODALITY_STORAGE[image_modality]
+
+
 def validate_image_modality(image_modality: str) -> ImageModality:
-    if image_modality not in ("rgb", "kronecker_delta"):
+    if image_modality not in IMAGE_MODALITIES:
         raise ValueError(
-            "image_modality must be either 'rgb' or 'kronecker_delta'."
+            f"image_modality must be one of {IMAGE_MODALITIES}."
         )
     return image_modality
 
@@ -31,8 +62,7 @@ def validate_image_modality(image_modality: str) -> ImageModality:
 def get_aligned_stack_files(course_path: str, image_modality: ImageModality):
     """Return trajectory/modality stack paths keyed by their numeric suffix."""
     image_modality = validate_image_modality(image_modality)
-    modality_folder = "images" if image_modality == "rgb" else "kronecker"
-    modality_prefix = "images" if image_modality == "rgb" else "kronecker"
+    modality_folder,modality_prefix = modality_storage(image_modality)
 
     def indexed(folder: str, prefix: str) -> dict[str, str]:
         folder_path = os.path.join(course_path, folder)
@@ -70,9 +100,9 @@ def prepare_rollout_images(traj_data: dict, image_data: dict,
             f"Frame count mismatch for rollout {traj_data['rollout_id']}."
         )
 
-    if image_modality == "kronecker_delta":
+    if is_event_modality(image_modality):
         if images.ndim != 3:
-            raise ValueError("Kronecker frames must have shape (N,H,W).")
+            raise ValueError("Event frames must have shape (N,H,W).")
         images = np.repeat(images[..., None], 3, axis=-1)
     elif images.ndim != 4 or images.shape[-1] != 3:
         raise ValueError("RGB frames must have shape (N,H,W,3).")

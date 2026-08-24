@@ -43,28 +43,50 @@ def process_buffered_rollout(
     h5_path: str,
     kronecker_path: str,
     expected_windows: int,
-) -> tuple[str, str]:
+    event_modalities=None,
+    event_surface_options=None,
+    event_output_paths:dict[str,str]|None=None,
+):
     """Run v2e for one rollout in an isolated CPU worker process."""
     import torch
 
     # A worker represents one CPU lane; prevent each torch instance from
     # internally claiming every core and oversubscribing the host.
     torch.set_num_threads(1)
-    recorder = V2ERolloutRecorder(h5_path,expected_windows,device="cpu")
+    recorder = V2ERolloutRecorder(
+        h5_path,expected_windows,device="cpu",
+        event_modalities=event_modalities,
+        event_surface_options=event_surface_options)
     try:
         frames = np.load(frame_path,mmap_mode="r",allow_pickle=False)
         if not (len(frames) == len(timestamps) == len(close_windows)):
             raise ValueError("Buffered frame timestamps and window flags are misaligned.")
         for frame,timestamp,close_window in zip(frames,timestamps,close_windows):
             recorder.process_gray_frame(frame,timestamp,close_window)
-        kronecker = recorder.close()
-        np.save(kronecker_path,kronecker,allow_pickle=False)
+        event_images = recorder.close_all()
+        if event_output_paths is None:
+            # Preserve the legacy single-Kronecker worker contract.
+            np.save(
+                kronecker_path,event_images["kronecker_delta"],
+                allow_pickle=False)
+        else:
+            if set(event_output_paths) != set(event_images):
+                raise ValueError(
+                    "Event output paths do not match generated modalities.")
+            for modality,output_path in event_output_paths.items():
+                np.save(output_path,event_images[modality],allow_pickle=False)
     except Exception:
         recorder.abort()
-        if os.path.isfile(kronecker_path):
-            os.unlink(kronecker_path)
+        cleanup_paths = (
+            [kronecker_path] if event_output_paths is None
+            else list(event_output_paths.values()))
+        for output_path in cleanup_paths:
+            if os.path.isfile(output_path):
+                os.unlink(output_path)
         raise
     finally:
         if os.path.isfile(frame_path):
             os.unlink(frame_path)
-    return kronecker_path,h5_path
+    if event_output_paths is None:
+        return kronecker_path,h5_path
+    return event_output_paths,h5_path

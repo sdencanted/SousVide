@@ -12,7 +12,8 @@ from figs.dynamics.external_forces import ExternalForces
 from figs.simulator import Simulator
 from tqdm.auto import tqdm
 from sousvide.synthesize.image_modality import (
-    ImageModality,kronecker_to_three_channels,validate_image_modality,
+    ImageModality,event_image_to_three_channels,is_event_modality,
+    validate_image_modality,
 )
 
 
@@ -126,16 +127,16 @@ class EventSimulator(Simulator):
                 xsn = xcr + np.random.normal(loc=mu_sn, scale=std_sn)
                 xsn[6:10] = oh.obedient_quaternion(xsn[6:10], xpr[6:10])
 
-                if image_modality == "kronecker_delta":
+                if is_event_modality(image_modality):
                     if event_frame_callback is None:
                         raise ValueError(
-                            "Kronecker deployment requires an event frame callback.")
+                            "Event-image deployment requires an event frame callback.")
                     event_image = event_frame_callback(
                         rgb,(warmup_steps+i)/hz_sim,True)
                     if event_image is None:
                         raise RuntimeError(
                             "Event callback did not return a control-boundary image.")
-                    policy_image = kronecker_to_three_channels(event_image)
+                    policy_image = event_image_to_three_channels(event_image)
                 else:
                     policy_image = rgb
 
