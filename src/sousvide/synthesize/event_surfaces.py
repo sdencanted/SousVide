@@ -17,7 +17,8 @@ import numpy as np
 
 
 EventModality = Literal[
-    "kronecker_delta", "event_bin", "event_eros", "event_tos"
+    "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "event_voxel_grid", "event_voxel_grid_polarity",
 ]
 
 EVENT_MODALITIES: tuple[EventModality, ...] = (
@@ -25,6 +26,12 @@ EVENT_MODALITIES: tuple[EventModality, ...] = (
     "event_bin",
     "event_eros",
     "event_tos",
+    "event_voxel_grid",
+    "event_voxel_grid_polarity",
+)
+
+EVENT_SURFACE_MODALITIES: tuple[EventModality, ...] = (
+    "event_bin", "event_eros", "event_tos",
 )
 
 DEFAULT_EVENT_SURFACE_OPTIONS: dict[EventModality, dict[str, float | int]] = {
@@ -32,6 +39,8 @@ DEFAULT_EVENT_SURFACE_OPTIONS: dict[EventModality, dict[str, float | int]] = {
     "event_bin": {},
     "event_eros": {"kernel_size": 7, "decay": 0.3},
     "event_tos": {"kernel_size": 5, "parameter": 2.0},
+    "event_voxel_grid": {},
+    "event_voxel_grid_polarity": {},
 }
 
 
@@ -86,7 +95,9 @@ def resolve_event_surface_options(
 def _validate_surface_options(
     modality: EventModality, options: Mapping[str, float | int]
 ) -> None:
-    if modality in ("kronecker_delta", "event_bin"):
+    if modality in (
+            "kronecker_delta", "event_bin", "event_voxel_grid",
+            "event_voxel_grid_polarity"):
         if options:
             raise ValueError(f"{modality} does not accept surface options.")
         return
@@ -239,8 +250,9 @@ def create_event_surface(
     options: Mapping[str, float | int] | None = None,
 ) -> EventSurface:
     """Construct one non-Kronecker event surface with resolved options."""
-    if modality == "kronecker_delta":
-        raise ValueError("Kronecker accumulation is handled by its count converter.")
+    if modality not in EVENT_SURFACE_MODALITIES:
+        raise ValueError(
+            f"{modality} accumulation is not handled by an event surface.")
     resolved = resolve_event_surface_options(
         (modality,), {modality: options or {}}
     )[modality]

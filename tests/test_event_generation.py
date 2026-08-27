@@ -8,6 +8,8 @@ import numpy as np
 from sousvide.synthesize.event_generator import (
     V2ERolloutRecorder,
     events_to_kronecker,
+    events_to_polarity_voxel_grid,
+    events_to_voxel_grid,
 )
 from sousvide.synthesize.event_simulator import EventSimulator
 from sousvide.synthesize.event_surfaces import (
@@ -83,6 +85,46 @@ class FakeEmulator:
 
 
 class EventImageTests(unittest.TestCase):
+    def test_voxel_grid_temporally_interpolates_signed_events(self):
+        events = np.array([
+            [0.0,0,0,1],
+            [0.375,1,0,-1],
+            [0.75,2,0,0],
+            [1.0,3,0,1],
+            [0.5,-1,0,1],
+        ],dtype=np.float32)
+        original = events.copy()
+
+        voxel = events_to_voxel_grid(events,1,4)
+
+        self.assertEqual(voxel.shape,(5,1,4))
+        self.assertEqual(voxel.dtype,np.float32)
+        self.assertEqual(voxel[0,0,0],1.0)
+        self.assertEqual(voxel[1,0,1],-0.5)
+        self.assertEqual(voxel[2,0,1],-0.5)
+        self.assertEqual(voxel[3,0,2],-1.0)
+        self.assertEqual(voxel[4,0,3],1.0)
+        np.testing.assert_array_equal(events,original)
+
+    def test_polarity_voxel_grid_uses_shared_time_axis(self):
+        events = np.array([
+            [2.0,0,0,1], [2.0,1,0,0],
+        ],dtype=np.float32)
+        voxel = events_to_polarity_voxel_grid(events,1,2)
+
+        self.assertEqual(voxel.shape,(10,1,2))
+        self.assertEqual(voxel.dtype,np.float32)
+        self.assertEqual(voxel[0,0,0],1.0)
+        self.assertEqual(voxel[5,0,1],1.0)
+        self.assertEqual(np.count_nonzero(voxel),2)
+
+    def test_empty_and_out_of_bounds_voxel_events_are_safe(self):
+        self.assertFalse(events_to_voxel_grid(None,2,3).any())
+        events = np.array([
+            [0.0,-1,0,1], [1.0,3,0,-1], [2.0,0,2,1],
+        ],dtype=np.float32)
+        self.assertFalse(events_to_voxel_grid(events,2,3).any())
+
     def test_one_v2e_stream_builds_multiple_event_modalities(self):
         first = np.array([
             [0.01,0,0,1], [0.02,1,0,-1], [0.03,1,0,1],
@@ -102,6 +144,59 @@ class EventImageTests(unittest.TestCase):
         self.assertTrue(all(value.shape == (1,2,3) for value in images.values()))
         self.assertEqual(images["event_bin"][0,0,2],255)
         self.assertEqual(len(FakeEmulator.instance.calls),2)
+
+    def test_one_v2e_stream_builds_both_voxel_modalities(self):
+        FakeEmulator.event_batches = [None,np.array([
+            [0.01,0,0,1], [0.03,1,0,-1], [0.05,2,0,1],
+        ],dtype=np.float32)]
+        recorder = V2ERolloutRecorder(
+            None,1,emulator_factory=FakeEmulator,
+            event_modalities=(
+                "event_bin","event_voxel_grid",
+                "event_voxel_grid_polarity"))
+        gray = np.zeros((2,3),dtype=np.uint8)
+        recorder.process_gray_frame(gray,0.0,False)
+        recorder.process_gray_frame(gray,0.05,True)
+        images = recorder.close_all()
+
+        self.assertEqual(images["event_bin"].shape,(1,2,3))
+        self.assertEqual(images["event_bin"].dtype,np.uint8)
+        self.assertEqual(images["event_voxel_grid"].shape,(1,5,2,3))
+        self.assertEqual(images["event_voxel_grid"].dtype,np.float32)
+        self.assertEqual(
+            images["event_voxel_grid_polarity"].shape,(1,10,2,3))
+        self.assertEqual(
+            images["event_voxel_grid_polarity"].dtype,np.float32)
+
+    def test_recorder_writes_voxel_stacks_directly_to_memmaps(self):
+        FakeEmulator.event_batches = [None,np.array([
+            [0.01,0,0,1], [0.03,1,0,-1], [0.05,2,0,1],
+        ],dtype=np.float32)]
+        with tempfile.TemporaryDirectory() as folder:
+            output_paths = {
+                modality:os.path.join(folder,f"{modality}.npy")
+                for modality in (
+                    "event_voxel_grid","event_voxel_grid_polarity")}
+            recorder = V2ERolloutRecorder(
+                None,1,emulator_factory=FakeEmulator,
+                event_modalities=tuple(output_paths),
+                image_output_paths=output_paths)
+            gray = np.zeros((2,3),dtype=np.uint8)
+            recorder.process_gray_frame(gray,0.0,False)
+            recorder.process_gray_frame(gray,0.05,True)
+            images = recorder.close_all()
+
+            self.assertTrue(all(
+                isinstance(images[modality],np.memmap)
+                for modality in output_paths))
+            self.assertEqual(recorder.images_by_modality[
+                "event_voxel_grid"],[])
+            self.assertEqual(
+                images["event_voxel_grid"].shape,(1,5,2,3))
+            self.assertEqual(
+                images["event_voxel_grid_polarity"].shape,(1,10,2,3))
+            self.assertTrue(all(
+                os.path.isfile(path) for path in output_paths.values()))
 
     def test_sparse_polarity_scaling_and_clipping(self):
         sparse = np.zeros((9, 4), dtype=np.float32)
@@ -158,6 +253,20 @@ class EventImageTests(unittest.TestCase):
             recorder = V2ERolloutRecorder(path, expected_windows=1)
             recorder.abort()
             self.assertFalse(os.path.exists(path))
+
+    def test_abort_removes_disk_backed_event_stacks(self):
+        FakeEmulator.event_batches = [None]
+        with tempfile.TemporaryDirectory() as folder:
+            output_path = os.path.join(folder,"event_voxel_grid.npy")
+            recorder = V2ERolloutRecorder(
+                None,1,emulator_factory=FakeEmulator,
+                event_modalities=("event_voxel_grid",),
+                image_output_paths={"event_voxel_grid":output_path})
+            recorder.process_gray_frame(
+                np.zeros((2,3),dtype=np.uint8),0.0,False)
+            self.assertTrue(os.path.isfile(output_path))
+            recorder.abort()
+            self.assertFalse(os.path.exists(output_path))
 
 
 class EventSimulatorTests(unittest.TestCase):

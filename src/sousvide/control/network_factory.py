@@ -13,7 +13,8 @@ from sousvide.control.networks.feature_extractors import (
 )
 from sousvide.control.networks.pave import Pave
 from sousvide.synthesize.image_modality import (
-    IMAGE_MODALITIES,ImageModality,validate_image_modality)
+    IMAGE_MODALITIES,ImageModality,image_modality_channels,
+    is_voxel_grid_modality,validate_image_modality)
 
 
 def get_network_path(
@@ -87,6 +88,10 @@ def generate_network(
 
     # Some useful intermediate variables
     network_type = net_config["network_type"]
+    if network_type == "dino" and is_voxel_grid_modality(image_modality):
+        raise ValueError(
+            "Voxel-grid image modalities are supported only by SVNet; "
+            "DINO image inputs require three channels.")
     network_path = get_network_path(pilot_path,net_name,image_modality)
     load_path = get_network_load_path(pilot_path,net_name,image_modality)
     print(f"Generating network '{net_name}' of type '{network_type}' at path '{network_path}'...")
@@ -112,7 +117,9 @@ def generate_network(
             network = SIFU(**net_config)
         # Command Networks
         elif network_type == "svnet":
-            network = SVNet(**net_config)
+            network = SVNet(
+                **net_config,
+                image_channels=image_modality_channels(image_modality))
         elif network_type == "dnnet":
             network = DNNet(**net_config)
         elif network_type == "pave":

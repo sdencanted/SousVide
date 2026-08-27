@@ -1,4 +1,5 @@
 import torch
+import copy
 
 from torch import nn
 from torchvision.models import (
@@ -11,6 +12,7 @@ class SVNet(BaseNet):
                  inputs:  dict[str, list[list[int|str]]],
                  outputs: dict[str, dict[str, list[list[int|str]]]],
                  layers:  dict[str, int|list[int]],
+                 image_channels:int|None=None,
                  network_type="svnet"):
         """
         Initialize a SousVide Command Network.
@@ -21,10 +23,23 @@ class SVNet(BaseNet):
 
         """
 
+        # Voxel-grid policies retain the historical ``rgb_image`` key but need
+        # every temporal bin selected by the policy's IO extraction.
+        if image_channels is not None:
+            inputs = copy.deepcopy(inputs)
+            input_groups = (
+                inputs.values()
+                if "prediction" in inputs and "deployment" in inputs
+                else (inputs,))
+            for input_group in input_groups:
+                if "rgb_image" in input_group:
+                    input_group["rgb_image"][-1] = image_channels
+
         # Initialize the parent class
         super(SVNet, self).__init__(inputs,outputs,network_type)
 
         # Unpack network configs
+        io_dims = self.get_io_dims()
         io_sizes = self.get_io_sizes()
         dropout = layers["dropout"]
         Nsq = layers["sqnet_size"]
@@ -55,8 +70,19 @@ class SVNet(BaseNet):
         mlp1.append(nn.Linear(prev_size, io_sizes["ypd"]["command"]))
 
         # Populate the network
+        feature_network = squeezenet1_1()
+        resolved_image_channels = io_dims["xdp"]["rgb_image"][0]
+        if resolved_image_channels != 3:
+            first_conv = feature_network.features[0]
+            feature_network.features[0] = nn.Conv2d(
+                resolved_image_channels,first_conv.out_channels,
+                kernel_size=first_conv.kernel_size,stride=first_conv.stride,
+                padding=first_conv.padding,dilation=first_conv.dilation,
+                groups=first_conv.groups,bias=first_conv.bias is not None,
+                padding_mode=first_conv.padding_mode)
+
         networks = nn.ModuleDict({
-            "feat": squeezenet1_1(),
+            "feat": feature_network,
             "mlp0": nn.Sequential(*mlp0),
             "mlp1": nn.Sequential(*mlp1)
         })

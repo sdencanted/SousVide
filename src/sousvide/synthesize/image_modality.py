@@ -1,4 +1,4 @@
-"""Shared helpers for RGB and Kronecker-delta observation inputs."""
+"""Shared helpers for RGB and event-based observation inputs."""
 
 from __future__ import annotations
 
@@ -11,13 +11,18 @@ import sousvide.synthesize.data_compress_helper as dch
 
 
 ImageModality = Literal[
-    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos"
+    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "event_voxel_grid", "event_voxel_grid_polarity",
 ]
 
 IMAGE_MODALITIES: tuple[ImageModality, ...] = (
-    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos"
+    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "event_voxel_grid", "event_voxel_grid_polarity",
 )
 EVENT_IMAGE_MODALITIES = IMAGE_MODALITIES[1:]
+VOXEL_GRID_MODALITIES: tuple[ImageModality, ...] = (
+    "event_voxel_grid", "event_voxel_grid_polarity",
+)
 
 _MODALITY_STORAGE = {
     "rgb": ("images", "images"),
@@ -25,6 +30,9 @@ _MODALITY_STORAGE = {
     "event_bin": ("event_bin", "event_bin"),
     "event_eros": ("event_eros", "event_eros"),
     "event_tos": ("event_tos", "event_tos"),
+    "event_voxel_grid": ("event_voxel_grid", "event_voxel_grid"),
+    "event_voxel_grid_polarity": (
+        "event_voxel_grid_polarity", "event_voxel_grid_polarity"),
 }
 
 
@@ -42,8 +50,36 @@ def event_image_to_three_channels(image: np.ndarray) -> np.ndarray:
     return np.repeat(image[...,None],3,axis=-1)
 
 
+def event_image_to_model_channels(
+        image: np.ndarray, image_modality: ImageModality) -> np.ndarray:
+    """Convert one stored event representation to the policy's HWC layout."""
+    image_modality = validate_image_modality(image_modality)
+    image = np.asarray(image)
+    if is_voxel_grid_modality(image_modality):
+        channels = image_modality_channels(image_modality)
+        if image.ndim != 3 or image.shape[0] != channels:
+            raise ValueError(
+                f"{image_modality} must have shape ({channels},H,W).")
+        return np.moveaxis(image,0,-1)
+    return event_image_to_three_channels(image)
+
+
 def is_event_modality(image_modality: str) -> bool:
     return image_modality in EVENT_IMAGE_MODALITIES
+
+
+def is_voxel_grid_modality(image_modality: str) -> bool:
+    return image_modality in VOXEL_GRID_MODALITIES
+
+
+def image_modality_channels(image_modality: ImageModality) -> int:
+    """Return the number of channels presented to an image-consuming model."""
+    image_modality = validate_image_modality(image_modality)
+    if image_modality == "event_voxel_grid":
+        return 5
+    if image_modality == "event_voxel_grid_polarity":
+        return 10
+    return 3
 
 
 def modality_storage(image_modality: ImageModality) -> tuple[str, str]:
@@ -86,7 +122,7 @@ def get_aligned_stack_files(course_path: str, image_modality: ImageModality):
 
 def prepare_rollout_images(traj_data: dict, image_data: dict,
                            image_modality: ImageModality) -> np.ndarray:
-    """Validate one aligned rollout and return three-channel HWC images."""
+    """Validate one aligned rollout and return model-ready HWC images."""
     image_modality = validate_image_modality(image_modality)
     if traj_data["rollout_id"] != image_data["rollout_id"]:
         raise ValueError("Trajectory and image rollout IDs do not match.")
@@ -100,7 +136,15 @@ def prepare_rollout_images(traj_data: dict, image_data: dict,
             f"Frame count mismatch for rollout {traj_data['rollout_id']}."
         )
 
-    if is_event_modality(image_modality):
+    if is_voxel_grid_modality(image_modality):
+        channels = image_modality_channels(image_modality)
+        if (images.ndim != 4 or images.shape[1] != channels
+                or images.dtype != np.float32):
+            raise ValueError(
+                f"{image_modality} frames must have float32 "
+                f"(N,{channels},H,W) format.")
+        images = np.moveaxis(images,1,-1)
+    elif is_event_modality(image_modality):
         if images.ndim != 3:
             raise ValueError("Event frames must have shape (N,H,W).")
         images = np.repeat(images[..., None], 3, axis=-1)

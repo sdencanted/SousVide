@@ -9,7 +9,25 @@ from typing import Literal
 from figs.control.base_controller import BaseController
 from albumentations.pytorch import ToTensorV2
 from sousvide.control.policy import Policy
-from sousvide.synthesize.image_modality import ImageModality,validate_image_modality
+from sousvide.synthesize.image_modality import (
+    ImageModality,image_modality_channels,is_voxel_grid_modality,
+    validate_image_modality)
+
+
+def _normalize_voxel_grid(image:torch.Tensor) -> torch.Tensor:
+    """Apply E2VID-style normalization to nonzero values in one voxel grid."""
+    nonzero = image != 0
+    count = nonzero.sum()
+    if count == 0:
+        return image
+    values = image[nonzero]
+    mean = values.mean()
+    variance = torch.mean(values*values)-mean*mean
+    if variance <= torch.finfo(image.dtype).eps:
+        return image
+    normalized = image.clone()
+    normalized[nonzero] = (values-mean)/torch.sqrt(variance)
+    return normalized
 
 class Pilot(BaseController):
     def __init__(self,cohort_name:str,pilot_name:str,
@@ -80,14 +98,18 @@ class Pilot(BaseController):
         }
 
         # Initialize image processing variables
-        transform = A.Compose([
-                A.Resize(256, 256),
-                A.CenterCrop(224, 224),
-                A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-                ToTensorV2()
-                ])            
-        process_image = lambda x: transform(image=x)["image"]
-        img_dim = [1,3,224,224]
+        transform_steps = [A.Resize(256,256),A.CenterCrop(224,224)]
+        if not is_voxel_grid_modality(image_modality):
+            transform_steps.append(A.Normalize(
+                mean=(0.485,0.456,0.406),std=(0.229,0.224,0.225)))
+        transform_steps.append(ToTensorV2())
+        transform = A.Compose(transform_steps)
+        if is_voxel_grid_modality(image_modality):
+            process_image = lambda x:_normalize_voxel_grid(
+                transform(image=x)["image"])
+        else:
+            process_image = lambda x:transform(image=x)["image"]
+        img_dim = [1,image_modality_channels(image_modality),224,224]
 
         ## Class Variables =================================================================================================
         

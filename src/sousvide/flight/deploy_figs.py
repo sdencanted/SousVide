@@ -20,7 +20,8 @@ from sousvide.control.pilot import Pilot
 from sousvide.synthesize.event_generator import OnlineEventImageGenerator
 from sousvide.synthesize.event_simulator import EventSimulator
 from sousvide.synthesize.image_modality import (
-    ImageModality,is_event_modality,validate_image_modality)
+    ImageModality,image_modality_channels,is_event_modality,
+    is_voxel_grid_modality,validate_image_modality)
 from sousvide.synthesize.event_surfaces import resolve_event_surface_options
 
 
@@ -56,13 +57,22 @@ class _NotebookPolicyDebugView:
         if command.shape != (4,):
             raise ValueError(
                 f"Expected [collective, wx, wy, wz], got command shape {command.shape}.")
-        if image.ndim != 3 or image.shape[-1] != 3:
+        expected_channels = image_modality_channels(image_modality)
+        if image.ndim != 3 or image.shape[-1] != expected_channels:
             raise ValueError(
-                f"Expected the policy image to have shape (H, W, 3), got {image.shape}.")
+                "Expected the policy image to have shape "
+                f"(H, W, {expected_channels}), got {image.shape}.")
 
-        # Kronecker images are repeated to three channels for the network. Show
-        # the single grayscale plane so their event structure is unambiguous.
-        display_image = image[...,0] if is_event_modality(image_modality) else image
+        if image_modality == "event_voxel_grid":
+            display_image = image.sum(axis=-1)
+        elif image_modality == "event_voxel_grid_polarity":
+            display_image = (
+                image[...,:5].sum(axis=-1)-image[...,5:].sum(axis=-1))
+        else:
+            # Grayscale event images are repeated to three model channels.
+            display_image = (
+                image[...,0] if is_event_modality(image_modality) else image)
+        voxel_limit = max(1e-6,float(np.max(np.abs(display_image))))
         thrust = command[0]
         rates = command[1:4]
 
@@ -70,7 +80,11 @@ class _NotebookPolicyDebugView:
             (self._figure,
              (self._image_axis,self._thrust_axis,self._rate_axis)) = self._plt.subplots(
                 1,3,figsize=(13,4),gridspec_kw={"width_ratios":[2,0.65,1]})
-            if is_event_modality(image_modality):
+            if is_voxel_grid_modality(image_modality):
+                self._image_artist = self._image_axis.imshow(
+                    display_image,cmap="coolwarm",
+                    vmin=-voxel_limit,vmax=voxel_limit)
+            elif is_event_modality(image_modality):
                 self._image_artist = self._image_axis.imshow(
                     display_image,cmap="gray",vmin=0,vmax=255)
             else:
@@ -97,7 +111,10 @@ class _NotebookPolicyDebugView:
             self._figure.tight_layout()
 
         self._image_artist.set_data(display_image)
-        if is_event_modality(image_modality):
+        if is_voxel_grid_modality(image_modality):
+            self._image_artist.set_cmap("coolwarm")
+            self._image_artist.set_clim(-voxel_limit,voxel_limit)
+        elif is_event_modality(image_modality):
             self._image_artist.set_cmap("gray")
             self._image_artist.set_clim(0,255)
         self._image_axis.set_title(

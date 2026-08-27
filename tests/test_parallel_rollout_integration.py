@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+import torch
 
 import sousvide.synthesize.rollout_generator as rollout_generator
 from sousvide.synthesize.rollout_generator import generate_rollouts
@@ -61,15 +62,31 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
                     "depth":np.zeros((1,2,3,1),dtype=np.uint8),
                 }
                 for rollout_id in ("001000","001001")]
+            event_specs = {
+                "event_bin":((1,2,3),np.uint8),
+                "event_eros":((1,2,3),np.uint8),
+                "event_tos":((1,2,3),np.uint8),
+                "event_voxel_grid":((1,5,2,3),np.float32),
+                "event_voxel_grid_polarity":((1,10,2,3),np.float32),
+            }
             event_images = {
                 modality:[
                     {
                         "rollout_id":rollout_id,
-                        modality:np.zeros((1,2,3),dtype=np.uint8),
+                        modality:np.zeros(shape,dtype=dtype),
                         "event_surface_config":{},
                     }
-                    for rollout_id in ("001000","001001")]
-                for modality in ("event_bin","event_eros","event_tos")}
+                for rollout_id in ("001000","001001")]
+                for modality,(shape,dtype) in event_specs.items()}
+            for modality in (
+                    "event_voxel_grid","event_voxel_grid_polarity"):
+                for index,event_image in enumerate(event_images[modality]):
+                    mapped = np.lib.format.open_memmap(
+                        os.path.join(workspace,f"{modality}-{index}.npy"),
+                        mode="w+",dtype=np.float32,
+                        shape=event_specs[modality][0])
+                    mapped[...] = event_image[modality]
+                    event_image[modality] = mapped
 
             real_replace = os.replace
 
@@ -88,15 +105,21 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
                     side_effect=replace_across_devices),
             ):
                 rollout_generator.save_rollouts(
-                    "cohort","course",trajectories,images,0,
+                    "cohort","course",trajectories,images,0,use_compress=True,
                     EventPaths=staged_paths,
                     EventImagesByModality=event_images)
 
             course = os.path.join(
                 workspace,"cohorts","cohort","rollout_data","course")
             for modality in event_images:
-                self.assertTrue(os.path.isfile(os.path.join(
-                    course,modality,f"{modality}001.pt")))
+                artifact = os.path.join(course,modality,f"{modality}001.pt")
+                self.assertTrue(os.path.isfile(artifact))
+                stored = torch.load(artifact,weights_only=False)[0][modality]
+                if modality.startswith("event_voxel_grid"):
+                    self.assertIsInstance(stored,torch.Tensor)
+                    self.assertEqual(stored.dtype,torch.float32)
+                else:
+                    self.assertIsInstance(stored[0],bytes)
             self.assertEqual(
                 sorted(os.listdir(os.path.join(course,"events"))),
                 ["001000.h5","001001.h5"])
@@ -130,18 +153,33 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
                 FakeEventSimulator(),FakeController(),desired,{},
                 frames,perturbations,0.05,np.inf,0,
                 event_staging_dir=staging,event_workers=2,
-                event_modalities=("event_bin","event_eros","event_tos"))
+                event_modalities=(
+                    "event_bin","event_eros","event_tos",
+                    "event_voxel_grid","event_voxel_grid_polarity"))
 
             expected_ids = ["001000","001001"]
             self.assertEqual(set(event_images),
-                             {"event_bin","event_eros","event_tos"})
+                             {"event_bin","event_eros","event_tos",
+                              "event_voxel_grid","event_voxel_grid_polarity"})
             for modality,rollouts in event_images.items():
                 self.assertEqual(
                     [item["rollout_id"] for item in rollouts],expected_ids)
+                channels = (
+                    10 if modality == "event_voxel_grid_polarity"
+                    else 5 if modality == "event_voxel_grid" else None)
+                expected_shape = (
+                    (1,channels,8,8) if channels is not None else (1,8,8))
                 self.assertTrue(all(
-                    item[modality].shape == (1,8,8) for item in rollouts))
+                    item[modality].shape == expected_shape for item in rollouts))
+                self.assertTrue(all(
+                    isinstance(item[modality],np.memmap) for item in rollouts))
             self.assertEqual(len(event_paths),2)
-            self.assertFalse(any(name.endswith(".npy") for name in os.listdir(staging)))
+            self.assertEqual(
+                len([name for name in os.listdir(staging)
+                     if name.endswith(".npy")]),
+                2*len(event_images))
+            self.assertFalse(any(
+                name.endswith(".frames.npy") for name in os.listdir(staging)))
 
     def test_parallel_results_remain_in_accepted_rollout_order(self):
         frames,perturbations,desired = self._inputs()
@@ -180,7 +218,12 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
             )
             self.assertTrue(all(os.path.isfile(path) for path in event_paths))
             self.assertFalse(any(name.endswith(".frames.npy") for name in os.listdir(staging)))
-            self.assertFalse(any(name.endswith(".kronecker.npy") for name in os.listdir(staging)))
+            self.assertEqual(
+                len([name for name in os.listdir(staging)
+                     if name.endswith(".kronecker_delta.npy")]),2)
+            self.assertTrue(all(
+                isinstance(item["kronecker_delta"],np.memmap)
+                for item in kronecker))
 
 
 if __name__ == "__main__":

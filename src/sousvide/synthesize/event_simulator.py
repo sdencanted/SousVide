@@ -12,7 +12,7 @@ from figs.dynamics.external_forces import ExternalForces
 from figs.simulator import Simulator
 from tqdm.auto import tqdm
 from sousvide.synthesize.image_modality import (
-    ImageModality,event_image_to_three_channels,is_event_modality,
+    ImageModality,event_image_to_model_channels,is_event_modality,
     validate_image_modality,
 )
 
@@ -136,7 +136,8 @@ class EventSimulator(Simulator):
                     if event_image is None:
                         raise RuntimeError(
                             "Event callback did not return a control-boundary image.")
-                    policy_image = event_image_to_three_channels(event_image)
+                    policy_image = event_image_to_model_channels(
+                        event_image,image_modality)
                 else:
                     policy_image = rgb
 

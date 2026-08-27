@@ -180,6 +180,31 @@ class OnlineEventDeploymentTests(unittest.TestCase):
             [timestamp for timestamp,close in callbacks if close],
             [0.05,0.1])
 
+    def test_student_receives_voxel_grids_in_hwc_layout(self):
+        for modality,channels in (
+                ("event_voxel_grid",5),
+                ("event_voxel_grid_polarity",10)):
+            simulator = self._simulator()
+            expert = RecordingPolicy()
+            student = RecordingPolicy()
+
+            def event_callback(rgb,timestamp,close_window):
+                if close_window:
+                    return np.ones((channels,*rgb.shape[:2]),dtype=np.float32)
+                return None
+
+            patches = self._patch_dynamics()
+            with patches[0],patches[1],patches[2],patches[3]:
+                simulator.simulate_with_events(
+                    student,1.0,1.1,np.zeros(10),event_callback,5,
+                    warmup_policy=expert,image_modality=modality)
+
+            self.assertEqual(len(student.images),2)
+            self.assertTrue(all(
+                image.shape == (2,3,channels) for image in student.images))
+            self.assertTrue(all(
+                image.dtype == np.float32 for image in student.images))
+
     def test_expert_baseline_skips_noncontrol_event_renders(self):
         simulator = self._simulator()
         expert = RecordingPolicy()

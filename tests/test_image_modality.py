@@ -3,10 +3,14 @@ import tempfile
 import unittest
 
 import numpy as np
+import torch
 
 from sousvide.synthesize import data_compress_helper as compression
 from sousvide.synthesize.image_modality import (
+    event_image_to_model_channels,
     get_aligned_stack_files,
+    image_modality_channels,
+    is_voxel_grid_modality,
     prepare_rollout_images,
 )
 
@@ -28,8 +32,34 @@ class CompressionTests(unittest.TestCase):
             compression.decompress_data(data[0], key=key)
             np.testing.assert_array_equal(data[0][key], original)
 
+    def test_voxel_tensor_deserializes_to_numpy_without_copy(self):
+        tensor = torch.arange(60,dtype=torch.float32).reshape(1,5,3,4)
+        data = {"event_voxel_grid":tensor}
+        compression.decompress_data(data,key="event_voxel_grid")
+        self.assertIsInstance(data["event_voxel_grid"],np.ndarray)
+        self.assertEqual(data["event_voxel_grid"].dtype,np.float32)
+        np.testing.assert_array_equal(
+            data["event_voxel_grid"],tensor.numpy())
+
 
 class ImageModalityTests(unittest.TestCase):
+    def test_voxel_modalities_keep_float_channels_and_independent_storage(self):
+        trajectory = {"rollout_id":"001000","Ndata":2}
+        for modality,channels in (
+                ("event_voxel_grid",5),
+                ("event_voxel_grid_polarity",10)):
+            voxel = np.arange(
+                2*channels*4*5,dtype=np.float32).reshape(2,channels,4,5)
+            prepared = prepare_rollout_images(
+                trajectory,{"rollout_id":"001000",modality:voxel},modality)
+            self.assertEqual(prepared.shape,(2,4,5,channels))
+            self.assertEqual(prepared.dtype,np.float32)
+            np.testing.assert_array_equal(prepared[...,0],voxel[:,0])
+            self.assertTrue(is_voxel_grid_modality(modality))
+            self.assertEqual(image_modality_channels(modality),channels)
+            np.testing.assert_array_equal(
+                event_image_to_model_channels(voxel[0],modality),prepared[0])
+
     def test_each_event_modality_has_independent_storage_and_three_channels(self):
         gray = np.arange(40,dtype=np.uint8).reshape(2,4,5)
         trajectory = {"rollout_id":"001000","Ndata":2}

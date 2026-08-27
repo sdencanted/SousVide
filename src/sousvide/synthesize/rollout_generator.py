@@ -19,7 +19,8 @@ from sousvide.synthesize.event_simulator import EventSimulator
 from sousvide.synthesize.event_surfaces import (
     resolve_event_surface_options,validate_event_modalities,
 )
-from sousvide.synthesize.image_modality import modality_storage
+from sousvide.synthesize.image_modality import (
+    is_voxel_grid_modality,modality_storage)
 from sousvide.synthesize.parallel_event_generator import (
     EventFrameBuffer,
     process_buffered_rollout,
@@ -168,6 +169,15 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
 
             Tsp_bts = sh.compute_Tsp_batches(t0,tf,dt_ro,rate,reps,Nro_ds)
 
+            event_staging_parent = None
+            if event_enabled:
+                workspace_path = os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.dirname(__file__))))
+                event_staging_parent = os.path.join(
+                    workspace_path,"cohorts",cohort_name,"rollout_data",
+                    course_name)
+                os.makedirs(event_staging_parent,exist_ok=True)
+
             # Initialize course progress bar
             Ndata = 0
             course_desc = ru.get_data_description(course_name,Ndata,subunits=subunits)
@@ -190,7 +200,8 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
 
                 # Stage H5 files until all aligned stack files save successfully.
                 with tempfile.TemporaryDirectory(
-                    prefix=f"sousvide-events-{course_name}-{idx_bt + 1:03d}-"
+                    prefix=f".sousvide-events-{idx_bt + 1:03d}-",
+                    dir=event_staging_parent,
                 ) as event_staging_dir:
                     rollout_data = generate_rollouts(
                         simulator,controller,tXUd,bframe,
@@ -351,6 +362,10 @@ def _generate_rollouts_impl(
             warmup_steps = int(hz_sim/controller.hz)
             expected_windows = int(np.round(dt_ro*controller.hz))
             staged_h5 = os.path.join(event_staging_dir,rollout_id+".h5")
+            output_paths = {
+                modality:os.path.join(
+                    event_staging_dir,rollout_id+f".{modality}.npy")
+                for modality in event_modalities}
             if parallel_events:
                 event_buffer = EventFrameBuffer()
                 event_callback = event_buffer.process_frame
@@ -358,7 +373,8 @@ def _generate_rollouts_impl(
                 recorder = V2ERolloutRecorder(
                     staged_h5,expected_windows,
                     event_modalities=event_modalities,
-                    event_surface_options=event_surface_options)
+                    event_surface_options=event_surface_options,
+                    image_output_paths=output_paths)
                 event_callback = recorder.process_frame
             try:
                 Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol = simulator.simulate_with_events(
@@ -399,10 +415,6 @@ def _generate_rollouts_impl(
             if generate_events and parallel_events:
                 frame_path = os.path.join(
                     event_staging_dir,rollout_id+".frames.npy")
-                output_paths = {
-                    modality:os.path.join(
-                        event_staging_dir,rollout_id+f".{modality}.npy")
-                    for modality in event_modalities}
                 timestamps,close_windows = event_buffer.save(frame_path)
                 future = event_pool.submit(
                     process_buffered_rollout,
@@ -446,7 +458,8 @@ def _generate_rollouts_impl(
                 completed_jobs.append((
                     rollout_id,
                     {
-                        modality:np.load(path,allow_pickle=False)
+                        modality:np.load(
+                            path,mmap_mode="r+",allow_pickle=False)
                         for modality,path in completed_outputs.items()
                     },
                     completed_h5))
@@ -454,15 +467,15 @@ def _generate_rollouts_impl(
                 if worker_error is None:
                     worker_error = error
 
-        for _,_,frame_path,output_paths,_ in event_jobs:
+        for _,_,frame_path,_,_ in event_jobs:
             if os.path.isfile(frame_path):
                 os.unlink(frame_path)
-            for output_path in output_paths.values():
-                if os.path.isfile(output_path):
-                    os.unlink(output_path)
 
         if worker_error is not None:
-            for *_,staged_h5 in event_jobs:
+            for *_,output_paths,staged_h5 in event_jobs:
+                for output_path in output_paths.values():
+                    if os.path.isfile(output_path):
+                        os.unlink(output_path)
                 if os.path.isfile(staged_h5):
                     os.unlink(staged_h5)
             raise worker_error
@@ -555,7 +568,8 @@ def save_rollouts(cohort_name:str,course_name:str,
         Images = dch.compress_data(Images,key="rgb")
         if EventImagesByModality is not None:
             for modality,event_images in EventImagesByModality.items():
-                dch.compress_data(event_images,key=modality)
+                if not is_voxel_grid_modality(modality):
+                    dch.compress_data(event_images,key=modality)
     # Protocol 4 represents binary image buffers as bytes rather than text.
     # This avoids UTF-8 decoding failures for pixel values above 0x7f.
     torch.save(Trajectories, traj_path, pickle_protocol=4)
@@ -565,7 +579,20 @@ def save_rollouts(cohort_name:str,course_name:str,
             folder,prefix = modality_storage(modality)
             event_stack_path = os.path.join(
                 dset_path,folder,prefix+dset_name+".pt")
-            torch.save(event_images,event_stack_path,pickle_protocol=4)
+            if is_voxel_grid_modality(modality):
+                # Numpy arrays are embedded in torch.save's in-memory pickle.
+                # Tensors are written as separate streamed storage records,
+                # which keeps large memory-mapped voxel stacks disk-backed.
+                serialized_event_images = []
+                for event_image in event_images:
+                    serialized_event_image = dict(event_image)
+                    serialized_event_image[modality] = torch.from_numpy(
+                        event_image[modality])
+                    serialized_event_images.append(serialized_event_image)
+            else:
+                serialized_event_images = event_images
+            torch.save(
+                serialized_event_images,event_stack_path,pickle_protocol=4)
 
         reference_images = next(iter(EventImagesByModality.values()))
         accepted_ids = {rollout["rollout_id"] for rollout in reference_images}

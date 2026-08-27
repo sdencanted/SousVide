@@ -2,6 +2,9 @@
 
 import numpy as np
 
+from sousvide.synthesize.image_modality import (
+    image_modality_channels,is_voxel_grid_modality)
+
 
 def validate_aligned_rollouts(
         trajectories,images,event_images,image_modality="kronecker_delta") -> None:
@@ -25,7 +28,17 @@ def validate_aligned_rollouts(
         ndata = trajectory["Ndata"]
         if rgb.shape[0] != ndata or event_frames.shape[0] != ndata:
             raise ValueError(f"Frame count mismatch for rollout {rollout_id}.")
-        if event_frames.dtype != np.uint8 or event_frames.ndim != 3:
-            raise ValueError("Event arrays must have uint8 (N,H,W) format.")
-        if rgb.shape[1:3] != event_frames.shape[1:3]:
+        if is_voxel_grid_modality(image_modality):
+            channels = image_modality_channels(image_modality)
+            if (event_frames.dtype != np.float32 or event_frames.ndim != 4
+                    or event_frames.shape[1] != channels):
+                raise ValueError(
+                    f"{image_modality} arrays must have float32 "
+                    f"(N,{channels},H,W) format.")
+            event_dimensions = event_frames.shape[2:4]
+        else:
+            if event_frames.dtype != np.uint8 or event_frames.ndim != 3:
+                raise ValueError("Event arrays must have uint8 (N,H,W) format.")
+            event_dimensions = event_frames.shape[1:3]
+        if rgb.shape[1:3] != event_dimensions:
             raise ValueError(f"Image dimensions do not match for rollout {rollout_id}.")

@@ -20,7 +20,9 @@ class ParallelEventGenerationTests(unittest.TestCase):
             h5_path = os.path.join(folder,"events.h5")
             output_paths = {
                 modality:os.path.join(folder,f"{modality}.npy")
-                for modality in ("event_bin","event_eros","event_tos")}
+                for modality in (
+                    "event_bin","event_eros","event_tos",
+                    "event_voxel_grid","event_voxel_grid_polarity")}
             frames = np.stack((
                 np.zeros((8,8),dtype=np.uint8),
                 np.full((8,8),255,dtype=np.uint8),
@@ -34,10 +36,17 @@ class ParallelEventGenerationTests(unittest.TestCase):
             self.assertEqual(completed,output_paths)
             self.assertEqual(completed_h5,h5_path)
             self.assertFalse(os.path.exists(frame_path))
-            for path in completed.values():
+            expected = {
+                "event_bin":((1,8,8),np.uint8),
+                "event_eros":((1,8,8),np.uint8),
+                "event_tos":((1,8,8),np.uint8),
+                "event_voxel_grid":((1,5,8,8),np.float32),
+                "event_voxel_grid_polarity":((1,10,8,8),np.float32),
+            }
+            for modality,path in completed.items():
                 images = np.load(path,allow_pickle=False)
-                self.assertEqual(images.shape,(1,8,8))
-                self.assertEqual(images.dtype,np.uint8)
+                self.assertEqual(images.shape,expected[modality][0])
+                self.assertEqual(images.dtype,expected[modality][1])
             with h5py.File(h5_path,"r") as event_file:
                 self.assertEqual(event_file["events"].shape[1],4)
 

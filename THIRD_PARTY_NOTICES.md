@@ -1,5 +1,15 @@
 # Third-party notices
 
+## rpg_e2vid voxel-grid voting
+
+The NumPy temporal voxel-grid implementations in this repository are derived
+from `utils/inference_utils.py` in
+https://github.com/cedric-scheerlinck/rpg_e2vid.
+
+GNU General Public License v3.0
+
+The full GPL-3.0 license text is included in this repository's `LICENSE` file.
+
 ## robotology/event-driven event surfaces
 
 The Python EROS and TOS event-surface implementations in this repository are

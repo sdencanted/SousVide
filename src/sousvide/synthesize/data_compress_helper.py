@@ -23,6 +23,15 @@ def decompress_data(
     """
     assert key in image_dict, f"No {key} images found in data dictionary"
     frames = image_dict[key]
+    # Voxel stacks are serialized as tensors so torch.save streams their
+    # disk-backed storage instead of constructing one enormous pickle buffer.
+    try:
+        import torch
+        if isinstance(frames,torch.Tensor):
+            frames = frames.detach().cpu().numpy()
+            image_dict[key] = frames
+    except ImportError:
+        pass
     if len(frames) == 0:
         return image_dict
 
