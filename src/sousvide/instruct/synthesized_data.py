@@ -5,7 +5,7 @@ from collections.abc import Iterator,Sequence
 from typing import Any
 from torch.utils.data import ConcatDataset,Dataset,Sampler
 from sousvide.synthesize.image_modality import (
-    ImageModality,is_event_modality,validate_image_modality)
+    ImageModality,uses_modality_observation_folder,validate_image_modality)
 
 
 OBSERVATION_FORMAT_VERSION = 2
@@ -190,7 +190,7 @@ def get_data_paths(cohort_name:str,
     workspace_path = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     topic_parts = [workspace_path,"cohorts",cohort_name,"observation_data",student_name]
-    if is_event_modality(image_modality):
+    if uses_modality_observation_folder(image_modality):
         topic_parts.append(image_modality)
     topic_parts.append(topic_name)
     topic_data_path = os.path.join(*topic_parts)

@@ -11,7 +11,7 @@ from albumentations.pytorch import ToTensorV2
 from sousvide.control.policy import Policy
 from sousvide.synthesize.image_modality import (
     ImageModality,image_modality_channels,is_voxel_grid_modality,
-    validate_image_modality)
+    is_grayscale_modality,rgb_to_grayscale,validate_image_modality)
 
 
 def _normalize_voxel_grid(image:torch.Tensor) -> torch.Tensor:
@@ -107,6 +107,9 @@ class Pilot(BaseController):
         if is_voxel_grid_modality(image_modality):
             process_image = lambda x:_normalize_voxel_grid(
                 transform(image=x)["image"])
+        elif is_grayscale_modality(image_modality):
+            process_image = lambda x:transform(
+                image=rgb_to_grayscale(x))["image"]
         else:
             process_image = lambda x:transform(image=x)["image"]
         img_dim = [1,image_modality_channels(image_modality),224,224]

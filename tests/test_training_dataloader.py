@@ -256,7 +256,7 @@ class TrainingDataLoaderTests(unittest.TestCase):
                     _validate_numerical_mode_options(**options)
 
         _validate_numerical_mode_options(**defaults)
-        for image_modality in ("rgb","kronecker_delta"):
+        for image_modality in ("rgb","grayscale","kronecker_delta"):
             with self.subTest(
                     network_name="commNet",image_modality=image_modality):
                 _validate_numerical_mode_options(**(

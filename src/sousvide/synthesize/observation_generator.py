@@ -5,7 +5,7 @@ import torch
 import sousvide.synthesize.data_compress_helper as dch
 from sousvide.synthesize.image_modality import (
     ImageModality,get_aligned_stack_files,prepare_rollout_images,
-    is_event_modality,validate_image_modality,
+    uses_modality_observation_folder,validate_image_modality,
 )
 import sousvide.control.network_helper as nh
 import sousvide.visualize.rich_utilities as ru
@@ -295,7 +295,7 @@ def save_observations(cohort_name:str,course_name:str,
     for topic_name in syllabus:
         # Create the topic directory if it doesn't exist
         topic_parts = [cohort_path,"observation_data",pilot_name]
-        if is_event_modality(image_modality):
+        if uses_modality_observation_folder(image_modality):
             topic_parts.append(image_modality)
         topic_parts.extend([topic_name,course_name])
         topic_path = os.path.join(*topic_parts)

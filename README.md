@@ -44,6 +44,26 @@ Check out the notebook examples in the notebooks folder:
   1. <b>figs_examples</b>: Example code for generating GSplats and executing trajectories within them (using FiGS).
   2. <b>sous_vide_examples</b>: Use this notebook to try out two of the policies generated in the paper.
 
+## Train with grayscale images
+
+Use the `grayscale` image modality when generating CommNet observations and
+training. Grayscale observations are derived from the existing lossless RGB
+rollouts, so the rollout data does not need to be regenerated.
+
+```python
+import sousvide.synthesize.observation_generator as og
+import sousvide.instruct.train_policy as tp
+
+og.generate_observation_data(
+    cohort, roster, networks=["commNet"], image_modality="grayscale")
+tp.train_roster(
+    cohort, roster, "commNet", 300, image_modality="grayscale")
+```
+
+Deployment uses the same option: `deploy_roster(...,
+image_modality="grayscale")`. Grayscale observations and CommNet weights are
+stored separately from their RGB counterparts.
+
 
 ## [COMING SOON: Oct 2025] Deploy SOUS VIDE in the Real World
 Deploy SOUS VIDE policies on an [MSL Drone](https://github.com/StanfordMSL/TrajBridge/wiki/3.-Drone-Hardware). Tutorial and code coming soon!

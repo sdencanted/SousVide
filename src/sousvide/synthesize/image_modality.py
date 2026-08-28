@@ -1,4 +1,4 @@
-"""Shared helpers for RGB and event-based observation inputs."""
+"""Shared helpers for RGB, grayscale, and event-based observation inputs."""
 
 from __future__ import annotations
 
@@ -11,21 +11,24 @@ import sousvide.synthesize.data_compress_helper as dch
 
 
 ImageModality = Literal[
-    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "rgb", "grayscale", "kronecker_delta", "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 ]
 
 IMAGE_MODALITIES: tuple[ImageModality, ...] = (
-    "rgb", "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "rgb", "grayscale", "kronecker_delta", "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 )
-EVENT_IMAGE_MODALITIES = IMAGE_MODALITIES[1:]
+EVENT_IMAGE_MODALITIES = IMAGE_MODALITIES[2:]
 VOXEL_GRID_MODALITIES: tuple[ImageModality, ...] = (
     "event_voxel_grid", "event_voxel_grid_polarity",
 )
 
 _MODALITY_STORAGE = {
     "rgb": ("images", "images"),
+    # Grayscale observations are derived from the original RGB rollout stack;
+    # no duplicate rollout artifact is needed.
+    "grayscale": ("images", "images"),
     "kronecker_delta": ("kronecker", "kronecker"),
     "event_bin": ("event_bin", "event_bin"),
     "event_eros": ("event_eros", "event_eros"),
@@ -34,6 +37,37 @@ _MODALITY_STORAGE = {
     "event_voxel_grid_polarity": (
         "event_voxel_grid_polarity", "event_voxel_grid_polarity"),
 }
+
+
+def rgb_to_grayscale(image: np.ndarray, repeat_channels: bool = True) -> np.ndarray:
+    """Convert RGB image content to BT.601 luminance.
+
+    By default the luminance plane is repeated across three channels. This
+    keeps grayscale usable by all existing RGB backbones, including pretrained
+    feature extractors, while ensuring that color information is removed.
+    """
+    image = np.asarray(image)
+    if image.ndim < 2:
+        raise ValueError("An image must have at least two dimensions.")
+
+    if image.ndim == 2:
+        grayscale = image[...,None]
+    elif image.shape[-1] == 1:
+        grayscale = image
+    elif image.shape[-1] == 3:
+        luminance = np.sum(
+            image.astype(np.float32)*np.array(
+                [0.299,0.587,0.114],dtype=np.float32),
+            axis=-1,
+        )
+        if np.issubdtype(image.dtype,np.integer):
+            info = np.iinfo(image.dtype)
+            luminance = np.clip(np.rint(luminance),info.min,info.max)
+        grayscale = luminance.astype(image.dtype,copy=False)[...,None]
+    else:
+        raise ValueError("An RGB image must have shape (...,H,W,3).")
+
+    return np.repeat(grayscale,3,axis=-1) if repeat_channels else grayscale
 
 
 def kronecker_to_three_channels(image: np.ndarray) -> np.ndarray:
@@ -66,6 +100,15 @@ def event_image_to_model_channels(
 
 def is_event_modality(image_modality: str) -> bool:
     return image_modality in EVENT_IMAGE_MODALITIES
+
+
+def is_grayscale_modality(image_modality: str) -> bool:
+    return image_modality == "grayscale"
+
+
+def uses_modality_observation_folder(image_modality: ImageModality) -> bool:
+    """Return whether observations must be isolated from legacy RGB data."""
+    return validate_image_modality(image_modality) != "rgb"
 
 
 def is_voxel_grid_modality(image_modality: str) -> bool:
@@ -127,8 +170,10 @@ def prepare_rollout_images(traj_data: dict, image_data: dict,
     if traj_data["rollout_id"] != image_data["rollout_id"]:
         raise ValueError("Trajectory and image rollout IDs do not match.")
 
-    image_data = dch.decompress_data(image_data, key=image_modality)
-    images = image_data[image_modality]
+    # Grayscale is generated from the lossless RGB rollout on demand.
+    storage_key = "rgb" if is_grayscale_modality(image_modality) else image_modality
+    image_data = dch.decompress_data(image_data, key=storage_key)
+    images = image_data[storage_key]
     if not isinstance(images, np.ndarray):
         raise TypeError(f"{image_modality} frames must decompress to an ndarray.")
     if images.shape[0] != traj_data["Ndata"]:
@@ -136,7 +181,11 @@ def prepare_rollout_images(traj_data: dict, image_data: dict,
             f"Frame count mismatch for rollout {traj_data['rollout_id']}."
         )
 
-    if is_voxel_grid_modality(image_modality):
+    if is_grayscale_modality(image_modality):
+        if images.ndim != 4 or images.shape[-1] != 3:
+            raise ValueError("RGB source frames must have shape (N,H,W,3).")
+        images = rgb_to_grayscale(images)
+    elif is_voxel_grid_modality(image_modality):
         channels = image_modality_channels(image_modality)
         if (images.ndim != 4 or images.shape[1] != channels
                 or images.dtype != np.float32):

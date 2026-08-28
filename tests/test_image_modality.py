@@ -10,8 +10,11 @@ from sousvide.synthesize.image_modality import (
     event_image_to_model_channels,
     get_aligned_stack_files,
     image_modality_channels,
+    is_grayscale_modality,
     is_voxel_grid_modality,
     prepare_rollout_images,
+    rgb_to_grayscale,
+    uses_modality_observation_folder,
 )
 
 
@@ -43,6 +46,48 @@ class CompressionTests(unittest.TestCase):
 
 
 class ImageModalityTests(unittest.TestCase):
+    def test_grayscale_is_derived_from_rgb_and_repeated_for_rgb_backbones(self):
+        rgb = np.array([[
+            [[255,0,0],[0,255,0]],
+            [[0,0,255],[10,20,30]],
+        ]],dtype=np.uint8)
+        trajectory = {"rollout_id":"001000","Ndata":1}
+        image_data = {"rollout_id":"001000","rgb":rgb}
+
+        prepared = prepare_rollout_images(
+            trajectory,image_data,"grayscale")
+
+        self.assertEqual(prepared.shape,(1,2,2,3))
+        self.assertTrue(is_grayscale_modality("grayscale"))
+        self.assertEqual(image_modality_channels("grayscale"),3)
+        np.testing.assert_array_equal(prepared[...,0],prepared[...,1])
+        np.testing.assert_array_equal(prepared[...,1],prepared[...,2])
+        np.testing.assert_array_equal(
+            prepared[...,0],np.array([[[76,150],[29,18]]],dtype=np.uint8))
+
+    def test_grayscale_uses_rgb_rollouts_but_separate_observations(self):
+        with tempfile.TemporaryDirectory() as course:
+            os.makedirs(os.path.join(course,"trajectories"))
+            os.makedirs(os.path.join(course,"images"))
+            trajectory_path = os.path.join(
+                course,"trajectories","trajectories001.pt")
+            image_path = os.path.join(course,"images","images001.pt")
+            open(trajectory_path,"wb").close()
+            open(image_path,"wb").close()
+
+            self.assertEqual(
+                get_aligned_stack_files(course,"grayscale"),
+                [(trajectory_path,image_path)])
+
+        self.assertTrue(uses_modality_observation_folder("grayscale"))
+        self.assertFalse(uses_modality_observation_folder("rgb"))
+
+    def test_grayscale_conversion_accepts_single_channel_input(self):
+        gray = np.arange(6,dtype=np.uint8).reshape(2,3,1)
+        converted = rgb_to_grayscale(gray)
+        self.assertEqual(converted.shape,(2,3,3))
+        np.testing.assert_array_equal(converted[...,0],gray[...,0])
+
     def test_voxel_modalities_keep_float_channels_and_independent_storage(self):
         trajectory = {"rollout_id":"001000","Ndata":2}
         for modality,channels in (
