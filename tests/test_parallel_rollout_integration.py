@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import h5py
 import numpy as np
 import torch
 
@@ -42,6 +43,69 @@ class FakeController:
 
 
 class ParallelRolloutIntegrationTests(unittest.TestCase):
+    def test_saved_event_streams_are_converted_in_a_separate_pass(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            fake_module_path = os.path.join(
+                workspace,"a","b","c","rollout_generator.py")
+            course_path = os.path.join(
+                workspace,"cohorts","cohort","rollout_data","course")
+            os.makedirs(os.path.join(course_path,"trajectories"))
+            os.makedirs(os.path.join(course_path,"images"))
+            os.makedirs(os.path.join(course_path,"events"))
+            rollout_id = "001000"
+            trajectories = [{
+                "rollout_id":rollout_id,
+                "Ndata":2,
+                "Tro":np.array([10.0,10.05,10.10]),
+            }]
+            images = [{
+                "rollout_id":rollout_id,
+                "rgb":np.zeros((2,4,5,3),dtype=np.uint8),
+                "depth":np.zeros((2,4,5,1),dtype=np.uint8),
+            }]
+            torch.save(
+                trajectories,
+                os.path.join(
+                    course_path,"trajectories","trajectories001.pt"))
+            torch.save(
+                images,
+                os.path.join(course_path,"images","images001.pt"))
+            first_window = [
+                [10000+index*1000,index%5,index%4,index%2]
+                for index in range(10)]
+            second_window = [
+                [60000+index*1000,index%5,index%4,index%2]
+                for index in range(10)]
+            h5_path = os.path.join(course_path,"events",rollout_id+".h5")
+            with h5py.File(h5_path,"w") as event_file:
+                event_file.create_dataset(
+                    "events",data=np.asarray(
+                        first_window+second_window,dtype=np.uint32))
+
+            with mock.patch.object(
+                    rollout_generator,"__file__",fake_module_path):
+                rollout_generator.generate_event_representations(
+                    "cohort",["course"],
+                    ("event_pseudo_gaussian","event_voxel_grid"),
+                    event_workers=1)
+
+            soft_path = os.path.join(
+                course_path,"event_pseudo_gaussian",
+                "event_pseudo_gaussian001.pt")
+            voxel_path = os.path.join(
+                course_path,"event_voxel_grid","event_voxel_grid001.pt")
+            soft = torch.load(soft_path,weights_only=False)[0]
+            voxel = torch.load(voxel_path,weights_only=False)[0]
+            self.assertEqual(
+                soft["event_pseudo_gaussian"].shape,(2,4,5))
+            self.assertTrue(soft["event_pseudo_gaussian"].any())
+            self.assertEqual(
+                soft["event_surface_config"],{"sigma":1.0,"radius":3})
+            self.assertEqual(
+                tuple(voxel["event_voxel_grid"].shape),(2,5,4,5))
+            self.assertEqual(voxel["event_voxel_grid"].dtype,torch.float32)
+            self.assertTrue(os.path.isfile(h5_path))
+
     def test_save_rollouts_writes_independent_event_artifacts(self):
         with tempfile.TemporaryDirectory() as workspace:
             fake_module_path = os.path.join(
@@ -63,6 +127,8 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
                 }
                 for rollout_id in ("001000","001001")]
             event_specs = {
+                "event_pseudo_gaussian":((1,2,3),np.uint8),
+                "event_bilinear":((1,2,3),np.uint8),
                 "event_bin":((1,2,3),np.uint8),
                 "event_eros":((1,2,3),np.uint8),
                 "event_tos":((1,2,3),np.uint8),
@@ -154,12 +220,14 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
                 frames,perturbations,0.05,np.inf,0,
                 event_staging_dir=staging,event_workers=2,
                 event_modalities=(
+                    "event_pseudo_gaussian","event_bilinear",
                     "event_bin","event_eros","event_tos",
                     "event_voxel_grid","event_voxel_grid_polarity"))
 
             expected_ids = ["001000","001001"]
             self.assertEqual(set(event_images),
-                             {"event_bin","event_eros","event_tos",
+                             {"event_pseudo_gaussian","event_bilinear",
+                              "event_bin","event_eros","event_tos",
                               "event_voxel_grid","event_voxel_grid_polarity"})
             for modality,rollouts in event_images.items():
                 self.assertEqual(
@@ -173,6 +241,12 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
                     item[modality].shape == expected_shape for item in rollouts))
                 self.assertTrue(all(
                     isinstance(item[modality],np.memmap) for item in rollouts))
+                if modality in (
+                        "event_pseudo_gaussian","event_bilinear"):
+                    self.assertTrue(all(
+                        item["event_surface_config"]
+                        == {"sigma":1.0,"radius":3}
+                        for item in rollouts))
             self.assertEqual(len(event_paths),2)
             self.assertEqual(
                 len([name for name in os.listdir(staging)
@@ -224,6 +298,34 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
             self.assertTrue(all(
                 isinstance(item["kronecker_delta"],np.memmap)
                 for item in kronecker))
+
+    def test_parallel_rollout_can_persist_raw_events_without_representations(self):
+        frames,perturbations,desired = self._inputs()
+        with (
+            tempfile.TemporaryDirectory() as staging,
+            mock.patch(
+                "sousvide.synthesize.rollout_generator.svu.compute_prms",
+                return_value=np.zeros(1)),
+            mock.patch(
+                "sousvide.synthesize.rollout_generator.svu.compute_Wrs",
+                return_value=np.zeros((1,6))),
+            mock.patch(
+                "sousvide.synthesize.rollout_generator.svu.compute_FOro",
+                return_value=np.zeros((1,4))),
+        ):
+            trajectories,images,event_images,event_paths = generate_rollouts(
+                FakeEventSimulator(),FakeController(),desired,{},
+                frames,perturbations,0.05,np.inf,0,
+                generate_events=True,event_staging_dir=staging,
+                event_workers=2,event_modalities=())
+
+            self.assertEqual(len(trajectories),2)
+            self.assertEqual(len(images),2)
+            self.assertEqual(event_images,{})
+            self.assertEqual(len(event_paths),2)
+            self.assertTrue(all(os.path.isfile(path) for path in event_paths))
+            self.assertFalse(any(
+                name.endswith(".npy") for name in os.listdir(staging)))
 
 
 if __name__ == "__main__":

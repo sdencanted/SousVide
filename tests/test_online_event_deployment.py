@@ -34,13 +34,16 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 if self.calls == 1:
                     return None
                 return np.array([
-                    [timestamp,0,0,1], [timestamp,1,0,-1],
+                    [timestamp,i%3,i%2,1 if i%2 else -1]
+                    for i in range(10)
                 ],dtype=np.float32)
 
             def cleanup(self):
                 pass
 
-        for modality in ("event_bin","event_eros","event_tos"):
+        for modality in (
+                "event_pseudo_gaussian","event_bilinear",
+                "event_bin","event_eros","event_tos"):
             generator = V2ERolloutRecorder(
                 None,1,emulator_factory=FakeEmulator,retain_images=False,
                 event_modalities=(modality,))

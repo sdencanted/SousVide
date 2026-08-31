@@ -11,6 +11,7 @@ import os
 from typing import Callable
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 from sousvide.synthesize.event_surfaces import (
     EVENT_SURFACE_MODALITIES,EventModality,create_event_surface,
@@ -23,6 +24,9 @@ VOXEL_GRID_BINS = 5
 VOXEL_GRID_MODALITIES = (
     "event_voxel_grid", "event_voxel_grid_polarity",
 )
+WINDOW_EVENT_MODALITIES = (
+    "kronecker_delta", "event_pseudo_gaussian", "event_bilinear",
+) + VOXEL_GRID_MODALITIES
 
 
 def _voxel_event_components(
@@ -139,13 +143,141 @@ def events_to_kronecker(
 
     counts = np.zeros((height, width), dtype=np.uint32)
     np.add.at(counts, (ys[valid], xs[valid]), 1)
-    nonzero = counts[counts > 0]
+    return _event_weights_to_uint8(counts)
+
+
+def _event_weights_to_uint8(weights: np.ndarray) -> np.ndarray:
+    """Scale nonzero aggregation weights using the legacy count-image rule."""
+    nonzero = weights[weights > 0]
     if nonzero.size == 0:
-        return image
+        return np.zeros(weights.shape,dtype=np.uint8)
 
     event_min = max(0.0, float(nonzero.min()) - 1.0)
-    scale = 255.0 / max(1.0, float(np.percentile(nonzero, 98)) - event_min)
-    return np.clip(counts.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+    scale = 255.0 / max(
+        np.finfo(np.float32).eps,
+        float(np.percentile(nonzero,98))-event_min)
+    return np.clip(
+        weights.astype(np.float32,copy=False)*scale,0,255).astype(np.uint8)
+
+
+def _weighted_event_xy(
+        events:np.ndarray|None,height:int,width:int,min_events:int):
+    """Return finite in-bounds floating-point coordinates for soft voting."""
+    if height <= 0 or width <= 0:
+        raise ValueError("Event-image dimensions must be positive.")
+    if events is None or len(events) < min_events:
+        empty = np.empty(0,dtype=np.float64)
+        return empty,empty
+
+    event_array = np.asarray(events)
+    if event_array.ndim != 2 or event_array.shape[1] < 3:
+        raise ValueError(
+            "Events must have shape (N, >=3) with columns [t, x, y, ...].")
+
+    xs = event_array[:,1].astype(np.float64,copy=False)
+    ys = event_array[:,2].astype(np.float64,copy=False)
+    valid = (
+        np.isfinite(xs) & np.isfinite(ys)
+        & (xs >= 0.0) & (xs < width)
+        & (ys >= 0.0) & (ys < height))
+    return xs[valid],ys[valid]
+
+
+def _validate_gaussian_parameters(sigma:float,radius:int) -> tuple[float,int]:
+    if (isinstance(sigma,bool) or not isinstance(sigma,(int,float))
+            or not np.isfinite(sigma) or float(sigma) <= 0.0):
+        raise ValueError("Gaussian sigma must be finite and positive.")
+    if (isinstance(radius,bool) or not isinstance(radius,int)
+            or not 1 <= radius <= 3):
+        raise ValueError("Gaussian radius must be an integer from 1 through 3.")
+    return float(sigma),radius
+
+
+def _accumulate_pseudo_gaussian(
+        xs:np.ndarray,ys:np.ndarray,height:int,width:int,
+        sigma:float,radius:int) -> np.ndarray:
+    """Accumulate the paper's locally truncated fully connected Gaussian."""
+    weights = np.zeros((height,width),dtype=np.float64)
+    if not len(xs):
+        return weights
+
+    pixel_radius = int(np.ceil(radius*sigma))
+    centers_x = np.floor(xs+0.5).astype(np.int64)
+    centers_y = np.floor(ys+0.5).astype(np.int64)
+    normalizer = 1.0/(2.0*np.pi*sigma*sigma)
+    denominator = 2.0*sigma*sigma
+    for y_offset in range(-pixel_radius,pixel_radius+1):
+        pixel_y = centers_y+y_offset
+        for x_offset in range(-pixel_radius,pixel_radius+1):
+            pixel_x = centers_x+x_offset
+            valid = (
+                (pixel_x >= 0) & (pixel_x < width)
+                & (pixel_y >= 0) & (pixel_y < height))
+            if not np.any(valid):
+                continue
+            distances = (
+                (pixel_x[valid]-xs[valid])**2
+                +(pixel_y[valid]-ys[valid])**2)
+            votes = normalizer*np.exp(-distances/denominator)
+            np.add.at(weights,(pixel_y[valid],pixel_x[valid]),votes)
+    return weights
+
+
+def events_to_pseudo_gaussian(
+        events:np.ndarray|None,height:int,width:int,
+        min_events:int=MIN_EVENTS_PER_IMAGE,sigma:float=1.0,
+        radius:int=3) -> np.ndarray:
+    """Build a pseudo fully connected Gaussian event image."""
+    sigma,radius = _validate_gaussian_parameters(sigma,radius)
+    xs,ys = _weighted_event_xy(events,height,width,min_events)
+    if len(xs) < min_events:
+        return np.zeros((height,width),dtype=np.uint8)
+    return _event_weights_to_uint8(
+        _accumulate_pseudo_gaussian(
+            xs,ys,height,width,sigma,radius))
+
+
+def _accumulate_bilinear(
+        xs:np.ndarray,ys:np.ndarray,height:int,width:int) -> np.ndarray:
+    """Accumulate four-neighbour bilinear votes before Gaussian smoothing."""
+    weights = np.zeros((height,width),dtype=np.float64)
+    if not len(xs):
+        return weights
+
+    left = np.floor(xs).astype(np.int64)
+    top = np.floor(ys).astype(np.int64)
+    dx = xs-left
+    dy = ys-top
+    for x_offset,y_offset,votes in (
+            (0,0,(1.0-dx)*(1.0-dy)),
+            (1,0,dx*(1.0-dy)),
+            (0,1,(1.0-dx)*dy),
+            (1,1,dx*dy)):
+        pixel_x = left+x_offset
+        pixel_y = top+y_offset
+        valid = (
+            (pixel_x >= 0) & (pixel_x < width)
+            & (pixel_y >= 0) & (pixel_y < height)
+            & (votes > 0.0))
+        np.add.at(weights,(pixel_y[valid],pixel_x[valid]),votes[valid])
+    return weights
+
+
+def events_to_bilinear(
+        events:np.ndarray|None,height:int,width:int,
+        min_events:int=MIN_EVENTS_PER_IMAGE,sigma:float=1.0,
+        radius:int=3) -> np.ndarray:
+    """Build a bilinear-voted event image followed by Gaussian smoothing."""
+    sigma,radius = _validate_gaussian_parameters(sigma,radius)
+    xs,ys = _weighted_event_xy(events,height,width,min_events)
+    if len(xs) < min_events:
+        return np.zeros((height,width),dtype=np.uint8)
+
+    pixel_radius = int(np.ceil(radius*sigma))
+    smoothed = gaussian_filter(
+        _accumulate_bilinear(xs,ys,height,width),sigma=sigma,
+        mode="constant",cval=0.0,radius=pixel_radius)
+    return _event_weights_to_uint8(smoothed)
 
 
 def _rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
@@ -179,11 +311,24 @@ class V2ERolloutRecorder:
         self.emulator_factory = emulator_factory
         self.device = device
         self.retain_images = retain_images
-        self.event_modalities = validate_event_modalities(
-            ("kronecker_delta",)
-            if event_modalities is None else event_modalities)
-        self.event_surface_options = resolve_event_surface_options(
-            self.event_modalities,event_surface_options)
+        if event_modalities is None:
+            requested_modalities = ("kronecker_delta",)
+        else:
+            requested_modalities = tuple(event_modalities)
+        if requested_modalities:
+            self.event_modalities = validate_event_modalities(
+                requested_modalities)
+            self.event_surface_options = resolve_event_surface_options(
+                self.event_modalities,event_surface_options)
+        else:
+            if retain_images:
+                raise ValueError(
+                    "At least one event modality is required when retaining images.")
+            if event_surface_options:
+                raise ValueError(
+                    "event_surface_options requires at least one event modality.")
+            self.event_modalities = ()
+            self.event_surface_options = {}
         if image_output_paths is not None and not retain_images:
             raise ValueError(
                 "image_output_paths cannot be used when retain_images=False.")
@@ -193,7 +338,8 @@ class V2ERolloutRecorder:
                 "Image output paths must match the selected event modalities.")
         self.image_output_paths = (
             {} if image_output_paths is None else dict(image_output_paths))
-        self.output_modality = self.event_modalities[0]
+        self.output_modality = (
+            self.event_modalities[0] if self.event_modalities else None)
         self.emulator = None
         self.height = None
         self.width = None
@@ -203,10 +349,12 @@ class V2ERolloutRecorder:
             modality:[] for modality in self.event_modalities}
         self._image_memmaps: dict[EventModality,np.memmap] = {}
         # Preserve the legacy attribute for callers that inspect it directly.
-        self.images = self.images_by_modality[self.output_modality]
+        self.images = (
+            self.images_by_modality[self.output_modality]
+            if self.output_modality is not None else [])
         self._closed_images = None
         self._retain_window_events = any(
-            modality == "kronecker_delta" or modality in VOXEL_GRID_MODALITIES
+            modality in WINDOW_EVENT_MODALITIES
             for modality in self.event_modalities)
         self.window_count = 0
         self.closed = False
@@ -301,6 +449,16 @@ class V2ERolloutRecorder:
             if "kronecker_delta" in self.event_modalities:
                 boundary_images["kronecker_delta"] = events_to_kronecker(
                     combined,self.height,self.width)
+            if "event_pseudo_gaussian" in self.event_modalities:
+                boundary_images["event_pseudo_gaussian"] = (
+                    events_to_pseudo_gaussian(
+                        combined,self.height,self.width,
+                        **self.event_surface_options[
+                            "event_pseudo_gaussian"]))
+            if "event_bilinear" in self.event_modalities:
+                boundary_images["event_bilinear"] = events_to_bilinear(
+                    combined,self.height,self.width,
+                    **self.event_surface_options["event_bilinear"])
             if "event_voxel_grid" in self.event_modalities:
                 boundary_images["event_voxel_grid"] = events_to_voxel_grid(
                     combined,self.height,self.width)
@@ -310,7 +468,8 @@ class V2ERolloutRecorder:
                         combined,self.height,self.width))
             for modality,surface in self.surfaces.items():
                 boundary_images[modality] = surface.snapshot()
-            image = boundary_images[self.output_modality]
+            if self.output_modality is not None:
+                image = boundary_images[self.output_modality]
             if self.retain_images:
                 if self.window_count >= self.expected_windows:
                     raise RuntimeError(

@@ -11,12 +11,14 @@ import sousvide.synthesize.data_compress_helper as dch
 
 
 ImageModality = Literal[
-    "rgb", "grayscale", "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "rgb", "grayscale", "kronecker_delta", "event_pseudo_gaussian",
+    "event_bilinear", "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 ]
 
 IMAGE_MODALITIES: tuple[ImageModality, ...] = (
-    "rgb", "grayscale", "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "rgb", "grayscale", "kronecker_delta", "event_pseudo_gaussian",
+    "event_bilinear", "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 )
 EVENT_IMAGE_MODALITIES = IMAGE_MODALITIES[2:]
@@ -30,6 +32,9 @@ _MODALITY_STORAGE = {
     # no duplicate rollout artifact is needed.
     "grayscale": ("images", "images"),
     "kronecker_delta": ("kronecker", "kronecker"),
+    "event_pseudo_gaussian": (
+        "event_pseudo_gaussian", "event_pseudo_gaussian"),
+    "event_bilinear": ("event_bilinear", "event_bilinear"),
     "event_bin": ("event_bin", "event_bin"),
     "event_eros": ("event_eros", "event_eros"),
     "event_tos": ("event_tos", "event_tos"),

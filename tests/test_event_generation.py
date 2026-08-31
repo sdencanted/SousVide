@@ -7,8 +7,12 @@ import numpy as np
 
 from sousvide.synthesize.event_generator import (
     V2ERolloutRecorder,
+    _accumulate_bilinear,
+    _accumulate_pseudo_gaussian,
+    events_to_bilinear,
     events_to_kronecker,
     events_to_polarity_voxel_grid,
+    events_to_pseudo_gaussian,
     events_to_voxel_grid,
 )
 from sousvide.synthesize.event_simulator import EventSimulator
@@ -65,6 +69,27 @@ class EventSurfaceTests(unittest.TestCase):
             resolve_event_surface_options(
                 ("event_bin",),{"event_eros":{"decay":0.2}})
 
+    def test_gaussian_aggregation_configuration_is_strict(self):
+        resolved = resolve_event_surface_options((
+            "event_pseudo_gaussian","event_bilinear"),{
+                "event_pseudo_gaussian":{"sigma":0.75,"radius":2}})
+        self.assertEqual(
+            resolved["event_pseudo_gaussian"],{"sigma":0.75,"radius":2})
+        self.assertEqual(
+            resolved["event_bilinear"],{"sigma":1.0,"radius":3})
+
+        for modality in ("event_pseudo_gaussian","event_bilinear"):
+            for options,error in (
+                    ({"sigma":0.0},"finite and positive"),
+                    ({"sigma":np.inf},"finite and positive"),
+                    ({"radius":0},"1 through 3"),
+                    ({"radius":4},"1 through 3"),
+                    ({"radius":True},"1 through 3")):
+                with self.subTest(modality=modality,options=options):
+                    with self.assertRaisesRegex(ValueError,error):
+                        resolve_event_surface_options(
+                            (modality,),{modality:options})
+
 
 class FakeEmulator:
     event_batches = []
@@ -85,6 +110,87 @@ class FakeEmulator:
 
 
 class EventImageTests(unittest.TestCase):
+    def test_pseudo_gaussian_matches_local_gaussian_equation(self):
+        weights = _accumulate_pseudo_gaussian(
+            np.array([3.0]),np.array([3.0]),7,7,sigma=1.0,radius=1)
+
+        normalizer = 1.0/(2.0*np.pi)
+        self.assertAlmostEqual(weights[3,3],normalizer)
+        self.assertAlmostEqual(weights[3,2],normalizer*np.exp(-0.5))
+        self.assertAlmostEqual(weights[2,2],normalizer*np.exp(-1.0))
+        self.assertEqual(np.count_nonzero(weights),9)
+        np.testing.assert_allclose(weights,np.flip(weights,axis=0))
+        np.testing.assert_allclose(weights,np.flip(weights,axis=1))
+
+    def test_pseudo_gaussian_fractional_center_and_radius(self):
+        narrow = _accumulate_pseudo_gaussian(
+            np.array([2.25]),np.array([2.75]),7,7,sigma=1.0,radius=1)
+        wide = _accumulate_pseudo_gaussian(
+            np.array([2.25]),np.array([2.75]),7,7,sigma=1.0,radius=2)
+
+        self.assertEqual(np.unravel_index(np.argmax(narrow),narrow.shape),(3,2))
+        self.assertEqual(np.count_nonzero(narrow),9)
+        self.assertEqual(np.count_nonzero(wide),25)
+        self.assertGreater(wide[3,0],0.0)
+        self.assertEqual(narrow[3,0],0.0)
+
+    def test_bilinear_vote_uses_exact_four_neighbour_weights(self):
+        weights = _accumulate_bilinear(
+            np.array([2.25]),np.array([2.75]),6,6)
+
+        self.assertEqual(np.count_nonzero(weights),4)
+        self.assertAlmostEqual(weights[2,2],0.1875)
+        self.assertAlmostEqual(weights[2,3],0.0625)
+        self.assertAlmostEqual(weights[3,2],0.5625)
+        self.assertAlmostEqual(weights[3,3],0.1875)
+        self.assertAlmostEqual(weights.sum(),1.0)
+
+    def test_bilinear_integer_vote_and_boundary_clipping(self):
+        integer = _accumulate_bilinear(
+            np.array([2.0]),np.array([3.0]),5,5)
+        boundary = _accumulate_bilinear(
+            np.array([4.75]),np.array([2.0]),5,5)
+
+        self.assertEqual(integer[3,2],1.0)
+        self.assertEqual(np.count_nonzero(integer),1)
+        self.assertAlmostEqual(boundary.sum(),0.25)
+        self.assertAlmostEqual(boundary[2,4],0.25)
+
+    def test_soft_aggregators_filter_events_and_ignore_polarity(self):
+        valid = np.array([
+            [i/100,2.25,2.75,1 if i%2 else -1]
+            for i in range(10)],dtype=np.float64)
+        opposite = valid.copy()
+        opposite[:,3] *= -1
+        invalid = np.array([
+            [1.0,np.nan,1.0,1], [1.1,1.0,np.inf,-1],
+            [1.2,-0.1,1.0,1], [1.3,5.0,1.0,1],
+        ])
+
+        for aggregate in (events_to_pseudo_gaussian,events_to_bilinear):
+            with self.subTest(aggregate=aggregate.__name__):
+                image = aggregate(valid,5,5)
+                self.assertEqual(image.shape,(5,5))
+                self.assertEqual(image.dtype,np.uint8)
+                self.assertTrue(image.any())
+                self.assertEqual(image.max(),255)
+                np.testing.assert_array_equal(image,aggregate(opposite,5,5))
+                np.testing.assert_array_equal(
+                    image,aggregate(np.concatenate((valid,invalid)),5,5))
+                self.assertFalse(aggregate(valid[:9],5,5).any())
+                with self.assertRaisesRegex(ValueError,"shape"):
+                    aggregate(np.zeros((10,2)),5,5)
+
+    def test_soft_aggregator_direct_parameters_are_validated(self):
+        events = np.zeros((10,4),dtype=np.float32)
+        for aggregate in (events_to_pseudo_gaussian,events_to_bilinear):
+            with self.assertRaisesRegex(ValueError,"finite and positive"):
+                aggregate(events,2,2,sigma=np.nan)
+            with self.assertRaisesRegex(ValueError,"1 through 3"):
+                aggregate(events,2,2,radius=4)
+            with self.assertRaisesRegex(ValueError,"dimensions"):
+                aggregate(events,0,2)
+
     def test_voxel_grid_temporally_interpolates_signed_events(self):
         events = np.array([
             [0.0,0,0,1],
@@ -127,23 +233,54 @@ class EventImageTests(unittest.TestCase):
 
     def test_one_v2e_stream_builds_multiple_event_modalities(self):
         first = np.array([
-            [0.01,0,0,1], [0.02,1,0,-1], [0.03,1,0,1],
-        ],dtype=np.float32)
+            [0.01+i/1000,i%3,0,1 if i%2 else -1]
+            for i in range(9)],dtype=np.float32)
         second = np.array([[0.05,2,0,1]],dtype=np.float32)
         FakeEmulator.event_batches = [first,second]
         recorder = V2ERolloutRecorder(
             None,1,emulator_factory=FakeEmulator,
-            event_modalities=("event_bin","event_eros","event_tos"))
+            event_modalities=(
+                "event_pseudo_gaussian","event_bilinear",
+                "event_bin","event_eros","event_tos"))
         gray = np.zeros((2,3),dtype=np.uint8)
         recorder.process_gray_frame(gray,0.01,False)
         boundary = recorder.process_gray_frame(gray,0.05,True)
         images = recorder.close_all()
 
         self.assertEqual(boundary.dtype,np.uint8)
-        self.assertEqual(set(images),{"event_bin","event_eros","event_tos"})
+        self.assertEqual(set(images),{
+            "event_pseudo_gaussian","event_bilinear",
+            "event_bin","event_eros","event_tos"})
         self.assertTrue(all(value.shape == (1,2,3) for value in images.values()))
         self.assertEqual(images["event_bin"][0,0,2],255)
+        self.assertTrue(images["event_pseudo_gaussian"].any())
+        self.assertTrue(images["event_bilinear"].any())
         self.assertEqual(len(FakeEmulator.instance.calls),2)
+
+    def test_recorder_forwards_soft_aggregation_options(self):
+        events = np.array([
+            [i/100,1.25,1.75,1] for i in range(10)],dtype=np.float32)
+        FakeEmulator.event_batches = [events]
+        options = {
+            "event_pseudo_gaussian":{"sigma":0.5,"radius":1},
+            "event_bilinear":{"sigma":0.75,"radius":2},
+        }
+        recorder = V2ERolloutRecorder(
+            None,1,emulator_factory=FakeEmulator,
+            event_modalities=tuple(options),event_surface_options=options)
+
+        recorder.process_gray_frame(
+            np.zeros((4,4),dtype=np.uint8),0.1,True)
+        images = recorder.close_all()
+
+        np.testing.assert_array_equal(
+            images["event_pseudo_gaussian"][0],
+            events_to_pseudo_gaussian(
+                events,4,4,sigma=0.5,radius=1))
+        np.testing.assert_array_equal(
+            images["event_bilinear"][0],
+            events_to_bilinear(
+                events,4,4,sigma=0.75,radius=2))
 
     def test_one_v2e_stream_builds_both_voxel_modalities(self):
         FakeEmulator.event_batches = [None,np.array([

@@ -4,9 +4,24 @@ from __future__ import annotations
 
 import os
 
+import h5py
 import numpy as np
 
-from sousvide.synthesize.event_generator import V2ERolloutRecorder, _rgb_to_gray
+from sousvide.synthesize.event_generator import (
+    V2ERolloutRecorder,
+    _rgb_to_gray,
+    events_to_bilinear,
+    events_to_kronecker,
+    events_to_polarity_voxel_grid,
+    events_to_pseudo_gaussian,
+    events_to_voxel_grid,
+)
+from sousvide.synthesize.event_surfaces import (
+    EVENT_SURFACE_MODALITIES,
+    create_event_surface,
+    resolve_event_surface_options,
+    validate_event_modalities,
+)
 
 
 class EventFrameBuffer:
@@ -46,6 +61,7 @@ def process_buffered_rollout(
     event_modalities=None,
     event_surface_options=None,
     event_output_paths:dict[str,str]|None=None,
+    retain_images:bool=True,
 ):
     """Run v2e and write event stacks directly to disk in a CPU worker."""
     import torch
@@ -58,9 +74,10 @@ def process_buffered_rollout(
         if event_output_paths is None else event_output_paths)
     recorder = V2ERolloutRecorder(
         h5_path,expected_windows,device="cpu",
+        retain_images=retain_images,
         event_modalities=event_modalities,
         event_surface_options=event_surface_options,
-        image_output_paths=output_paths)
+        image_output_paths=output_paths if retain_images else None)
     try:
         frames = np.load(frame_path,mmap_mode="r",allow_pickle=False)
         if not (len(frames) == len(timestamps) == len(close_windows)):
@@ -68,7 +85,7 @@ def process_buffered_rollout(
         for frame,timestamp,close_window in zip(frames,timestamps,close_windows):
             recorder.process_gray_frame(frame,timestamp,close_window)
         event_images = recorder.close_all()
-        if set(output_paths) != set(event_images):
+        if retain_images and set(output_paths) != set(event_images):
             raise ValueError(
                 "Event output paths do not match generated modalities.")
     except Exception:
@@ -83,3 +100,99 @@ def process_buffered_rollout(
     if event_output_paths is None:
         return kronecker_path,h5_path
     return event_output_paths,h5_path
+
+
+def process_event_stream_rollout(
+        h5_path:str,window_end_times:tuple[float,...],height:int,width:int,
+        event_modalities,event_surface_options,event_output_paths:dict[str,str]):
+    """Generate aligned event representations from one persisted v2e stream."""
+    modalities = validate_event_modalities(event_modalities)
+    options = resolve_event_surface_options(
+        modalities,event_surface_options)
+    if set(event_output_paths) != set(modalities):
+        raise ValueError(
+            "Event output paths must match the selected event modalities.")
+    if height <= 0 or width <= 0:
+        raise ValueError("Event-image dimensions must be positive.")
+    if not window_end_times:
+        raise ValueError("At least one event window is required.")
+    boundaries_us = np.rint(
+        np.asarray(window_end_times,dtype=np.float64)*1e6).astype(np.int64)
+    if np.any(np.diff(boundaries_us) <= 0):
+        raise ValueError("Event window end times must be strictly increasing.")
+
+    with h5py.File(h5_path,"r") as event_file:
+        if "events" not in event_file:
+            raise ValueError(f"Event stream has no 'events' dataset: {h5_path}")
+        stored_events = np.asarray(event_file["events"])
+    if stored_events.ndim != 2 or stored_events.shape[1] < 4:
+        raise ValueError(
+            f"Event stream must have shape (N, >=4): {h5_path}")
+    if len(stored_events) and np.any(np.diff(stored_events[:,0]) < 0):
+        raise ValueError(f"Event timestamps are not monotonic: {h5_path}")
+
+    output_arrays = {}
+    for modality,path in event_output_paths.items():
+        output_folder = os.path.dirname(path) or "."
+        os.makedirs(output_folder,exist_ok=True)
+        if modality == "event_voxel_grid":
+            shape = (len(boundaries_us),5,height,width)
+            dtype = np.float32
+        elif modality == "event_voxel_grid_polarity":
+            shape = (len(boundaries_us),10,height,width)
+            dtype = np.float32
+        else:
+            shape = (len(boundaries_us),height,width)
+            dtype = np.uint8
+        output_arrays[modality] = np.lib.format.open_memmap(
+            path,mode="w+",dtype=dtype,shape=shape)
+
+    surfaces = {
+        modality:create_event_surface(
+            modality,height,width,options[modality])
+        for modality in modalities if modality in EVENT_SURFACE_MODALITIES}
+    start_index = 0
+    try:
+        timestamps = stored_events[:,0]
+        for window_index,boundary_us in enumerate(boundaries_us):
+            end_index = int(np.searchsorted(
+                timestamps,boundary_us,side="right"))
+            events = stored_events[start_index:end_index].astype(
+                np.float64,copy=True)
+            if len(events):
+                events[:,0] /= 1e6
+                events[:,3] = np.where(events[:,3] > 0,1.0,-1.0)
+            for surface in surfaces.values():
+                surface.update(events)
+            for modality in modalities:
+                if modality == "kronecker_delta":
+                    image = events_to_kronecker(events,height,width)
+                elif modality == "event_pseudo_gaussian":
+                    image = events_to_pseudo_gaussian(
+                        events,height,width,**options[modality])
+                elif modality == "event_bilinear":
+                    image = events_to_bilinear(
+                        events,height,width,**options[modality])
+                elif modality == "event_voxel_grid":
+                    image = events_to_voxel_grid(events,height,width)
+                elif modality == "event_voxel_grid_polarity":
+                    image = events_to_polarity_voxel_grid(
+                        events,height,width)
+                else:
+                    image = surfaces[modality].snapshot()
+                output_arrays[modality][window_index] = image
+            start_index = end_index
+        if start_index != len(stored_events):
+            raise ValueError(
+                f"Event stream contains events after the final window: {h5_path}")
+        for images in output_arrays.values():
+            images.flush()
+    except Exception:
+        for images in output_arrays.values():
+            images.flush()
+            images._mmap.close()
+        for path in event_output_paths.values():
+            if os.path.isfile(path):
+                os.unlink(path)
+        raise
+    return event_output_paths

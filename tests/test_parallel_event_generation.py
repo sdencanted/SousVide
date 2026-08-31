@@ -21,6 +21,7 @@ class ParallelEventGenerationTests(unittest.TestCase):
             output_paths = {
                 modality:os.path.join(folder,f"{modality}.npy")
                 for modality in (
+                    "event_pseudo_gaussian","event_bilinear",
                     "event_bin","event_eros","event_tos",
                     "event_voxel_grid","event_voxel_grid_polarity")}
             frames = np.stack((
@@ -37,6 +38,8 @@ class ParallelEventGenerationTests(unittest.TestCase):
             self.assertEqual(completed_h5,h5_path)
             self.assertFalse(os.path.exists(frame_path))
             expected = {
+                "event_pseudo_gaussian":((1,8,8),np.uint8),
+                "event_bilinear":((1,8,8),np.uint8),
                 "event_bin":((1,8,8),np.uint8),
                 "event_eros":((1,8,8),np.uint8),
                 "event_tos":((1,8,8),np.uint8),

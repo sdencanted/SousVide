@@ -64,6 +64,41 @@ Deployment uses the same option: `deploy_roster(...,
 image_modality="grayscale")`. Grayscale observations and CommNet weights are
 stored separately from their RGB counterparts.
 
+## Generate Gaussian or bilinear event images
+
+`event_pseudo_gaussian` and `event_bilinear` are soft-voting alternatives to
+the `kronecker_delta` event image. They use the paper defaults of one-pixel
+Gaussian sigma and a three-sigma finite radius unless overridden.
+Rollout generation first saves the raw v2e streams; representations are then
+derived from those streams without rerunning the simulation.
+
+```python
+import sousvide.synthesize.rollout_generator as rg
+
+rg.generate_rollout_data(
+    cohort_name=cohort,
+    course_names=courses,
+    gsplat_name=scene,
+    method_name=method,
+    generate_events=True,
+    event_workers=10,
+)
+rg.generate_event_representations(
+    cohort_name=cohort,
+    course_names=courses,
+    event_modalities=("event_pseudo_gaussian", "event_bilinear"),
+    event_workers=10,
+    event_surface_options={
+        "event_pseudo_gaussian": {"sigma": 1.0, "radius": 3},
+        "event_bilinear": {"sigma": 1.0, "radius": 3},
+    },
+)
+```
+
+Select either name as `image_modality` when generating observations, training,
+or deploying. Each representation is stored independently and presented to
+existing RGB backbones as three repeated grayscale channels.
+
 
 ## [COMING SOON: Oct 2025] Deploy SOUS VIDE in the Real World
 Deploy SOUS VIDE policies on an [MSL Drone](https://github.com/StanfordMSL/TrajBridge/wiki/3.-Drone-Hardware). Tutorial and code coming soon!

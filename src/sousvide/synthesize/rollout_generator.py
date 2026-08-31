@@ -24,6 +24,7 @@ from sousvide.synthesize.image_modality import (
 from sousvide.synthesize.parallel_event_generator import (
     EventFrameBuffer,
     process_buffered_rollout,
+    process_event_stream_rollout,
 )
 import sousvide.visualize.rich_utilities as ru
 import sousvide.utilities.sousvide_utilities as svu
@@ -68,7 +69,10 @@ def _resolve_requested_event_modalities(
         event_modalities = ("kronecker_delta",)
     elif not isinstance(event_modalities,str):
         event_modalities = tuple(event_modalities)
-        if not event_modalities and not generate_events:
+        if not event_modalities:
+            if event_surface_options:
+                raise ValueError(
+                    "event_surface_options requires at least one event modality.")
             return (),{}
     modalities = validate_event_modalities(event_modalities)
     return modalities,resolve_event_surface_options(
@@ -79,9 +83,7 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
                           expert_name:str="Viper",bframe_name:str="carl",
                           Nro_ds:int=50,use_compress:bool=False,
                           generate_events:bool=False,
-                          event_workers:int=1,
-                          event_modalities=None,
-                          event_surface_options:dict[str,dict]|None=None) -> None:
+                          event_workers:int=1) -> None:
     
     """
     Generates rollout data for a given cohort. The rollout data comprises a set of courses
@@ -97,12 +99,10 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
         method_name:    Data generation method detailing the sampling and simulation configs.
         expert_name:    Expert pilot (default is a vrmpc_fr) to fly the trajectories.
         bframe_name:    Base frame for flying the trajectories (default is carl).
-        Nro_sv:         Number of rollouts per save.
+        Nro_ds:         Number of rollouts per saved dataset stack.
         use_compress:   Compress the image data.
-        generate_events: Generate legacy v2e H5 and Kronecker images.
+        generate_events: Generate and retain raw v2e H5 event streams.
         event_workers:  Number of CPU processes used for v2e (default 1).
-        event_modalities: Event image representations generated from one v2e stream.
-        event_surface_options: Per-modality EROS/TOS parameter overrides.
 
     Returns:
         None:           (flight data saved to cohort directory)
@@ -111,10 +111,7 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
     # Initialize the progress variables
     if event_workers < 1:
         raise ValueError("event_workers must be at least 1.")
-    active_event_modalities,resolved_surface_options = (
-        _resolve_requested_event_modalities(
-            generate_events,event_modalities,event_surface_options))
-    event_enabled = bool(active_event_modalities)
+    event_enabled = generate_events
 
     progress = ru.get_generation_progress()
     subunits = "dpts"
@@ -209,16 +206,15 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
                         dt_ro,method["tol_select"],
                         idx_bt,sample_bar,
                         generate_events=event_enabled,
-                        event_modalities=active_event_modalities,
-                        event_surface_options=resolved_surface_options,
+                        event_modalities=(),
                         event_staging_dir=event_staging_dir,
                         event_workers=event_workers)
 
                     if event_enabled:
-                        Trajectories,Images,EventImages,EventPaths = rollout_data
+                        Trajectories,Images,_,EventPaths = rollout_data
                     else:
                         Trajectories,Images = rollout_data
-                        EventImages,EventPaths = None,None
+                        EventPaths = None
 
                     progress.update(sample_task,description=sample_desc2)
                     progress.refresh()
@@ -226,8 +222,7 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
                     save_rollouts(cohort_name,course_name,
                                 Trajectories,Images,
                                 idx_bt,use_compress,
-                                EventPaths=EventPaths,
-                                EventImagesByModality=EventImages)
+                                EventPaths=EventPaths)
 
                 # Update the data count
                 Ndata += sum([trajectory["Ndata"] for trajectory in Trajectories])
@@ -239,6 +234,165 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
 
             # Ensure progress catches last update
             progress.refresh()
+
+
+def _save_event_representation_stack(
+        dset_path:str,dset_name:str,Trajectories:list[dict],Images:list[dict],
+        EventImagesByModality:dict[str,list[dict]],
+        use_compress:bool=False) -> None:
+    """Validate and save one stack of derived event representations."""
+    if not EventImagesByModality:
+        raise ValueError("EventImagesByModality must not be empty.")
+    lengths = set()
+    for modality,event_images in EventImagesByModality.items():
+        validate_aligned_rollouts(
+            Trajectories,Images,event_images,image_modality=modality)
+        lengths.add(len(event_images))
+    if len(lengths) != 1:
+        raise ValueError("Event modality rollout counts do not match.")
+
+    for modality,event_images in EventImagesByModality.items():
+        folder,prefix = modality_storage(modality)
+        output_folder = os.path.join(dset_path,folder)
+        os.makedirs(output_folder,exist_ok=True)
+        if use_compress and not is_voxel_grid_modality(modality):
+            dch.compress_data(event_images,key=modality)
+        if is_voxel_grid_modality(modality):
+            # Tensor storage keeps large memory-mapped stacks disk-backed
+            # while torch.save streams them to the final artifact.
+            serialized_event_images = []
+            for event_image in event_images:
+                serialized_event_image = dict(event_image)
+                serialized_event_image[modality] = torch.from_numpy(
+                    event_image[modality])
+                serialized_event_images.append(serialized_event_image)
+        else:
+            serialized_event_images = event_images
+        torch.save(
+            serialized_event_images,
+            os.path.join(output_folder,prefix+dset_name+".pt"),
+            pickle_protocol=4)
+
+
+def generate_event_representations(
+        cohort_name:str,course_names:list[str],event_modalities,
+        event_workers:int=1,
+        event_surface_options:dict[str,dict]|None=None,
+        use_compress:bool=False) -> None:
+    """Derive aligned event-image stacks from saved rollout H5 streams.
+
+    Run this after :func:`generate_rollout_data` with
+    ``generate_events=True``. The saved RGB and trajectory stacks provide the
+    image dimensions and control-window boundaries; the raw H5 streams provide
+    the events, so flight simulation and v2e are not rerun.
+    """
+    if event_workers < 1:
+        raise ValueError("event_workers must be at least 1.")
+    modalities = validate_event_modalities(event_modalities)
+    resolved_options = resolve_event_surface_options(
+        modalities,event_surface_options)
+    workspace_path = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+    event_pool = None
+    if event_workers > 1:
+        event_pool = ProcessPoolExecutor(
+            max_workers=event_workers,mp_context=get_context("spawn"))
+    try:
+        for course_name in course_names:
+            dset_path = os.path.join(
+                workspace_path,"cohorts",cohort_name,"rollout_data",
+                course_name)
+            images_path = os.path.join(dset_path,"images")
+            trajectories_path = os.path.join(dset_path,"trajectories")
+            events_path = os.path.join(dset_path,"events")
+            if not os.path.isdir(images_path):
+                raise FileNotFoundError(
+                    f"Rollout image directory does not exist: {images_path}")
+            if not os.path.isdir(events_path):
+                raise FileNotFoundError(
+                    "Raw event streams do not exist; run generate_rollout_data "
+                    f"with generate_events=True first: {events_path}")
+
+            stack_pattern = re.compile(r"^images(.+)\.pt$")
+            stacks = []
+            for filename in os.listdir(images_path):
+                match = stack_pattern.fullmatch(filename)
+                if match:
+                    stacks.append((match.group(1),filename))
+            for dset_name,images_filename in sorted(stacks):
+                trajectory_path = os.path.join(
+                    trajectories_path,"trajectories"+dset_name+".pt")
+                if not os.path.isfile(trajectory_path):
+                    raise FileNotFoundError(
+                        f"Matching trajectory stack does not exist: {trajectory_path}")
+                Trajectories = torch.load(
+                    trajectory_path,weights_only=False)
+                Images = torch.load(
+                    os.path.join(images_path,images_filename),
+                    weights_only=False)
+                if len(Trajectories) != len(Images):
+                    raise ValueError(
+                        f"Trajectory and RGB rollout counts do not match in stack {dset_name}.")
+                for image_data in Images:
+                    dch.decompress_data(image_data,key="rgb")
+
+                with tempfile.TemporaryDirectory(
+                        prefix=f".sousvide-representations-{dset_name}-",
+                        dir=dset_path) as staging_path:
+                    jobs = []
+                    for trajectory,image_data in zip(Trajectories,Images):
+                        rollout_id = trajectory["rollout_id"]
+                        if image_data["rollout_id"] != rollout_id:
+                            raise ValueError(
+                                f"Trajectory and RGB rollout IDs do not match: {rollout_id}")
+                        rgb = image_data["rgb"]
+                        if not isinstance(rgb,np.ndarray) or rgb.ndim != 4:
+                            raise ValueError(
+                                f"RGB rollout {rollout_id} must have shape (N,H,W,C).")
+                        times = np.asarray(trajectory["Tro"],dtype=np.float64)
+                        if len(times) != len(rgb)+1:
+                            raise ValueError(
+                                f"Trajectory and RGB frame counts do not match: {rollout_id}")
+                        window_end_times = tuple(times[1:]-times[0])
+                        h5_path = os.path.join(events_path,rollout_id+".h5")
+                        if not os.path.isfile(h5_path):
+                            raise FileNotFoundError(
+                                f"Raw event stream does not exist: {h5_path}")
+                        output_paths = {
+                            modality:os.path.join(
+                                staging_path,rollout_id+f".{modality}.npy")
+                            for modality in modalities}
+                        args = (
+                            h5_path,window_end_times,rgb.shape[1],rgb.shape[2],
+                            modalities,resolved_options,output_paths)
+                        if event_pool is None:
+                            jobs.append(process_event_stream_rollout(*args))
+                        else:
+                            jobs.append(event_pool.submit(
+                                process_event_stream_rollout,*args))
+
+                    completed_outputs = (
+                        jobs if event_pool is None
+                        else [future.result() for future in jobs])
+                    EventImages = {modality:[] for modality in modalities}
+                    for trajectory,output_paths in zip(
+                            Trajectories,completed_outputs):
+                        rollout_id = trajectory["rollout_id"]
+                        for modality,path in output_paths.items():
+                            EventImages[modality].append({
+                                modality:np.load(
+                                    path,mmap_mode="r+",allow_pickle=False),
+                                "rollout_id":rollout_id,
+                                "event_surface_config":resolved_options[modality],
+                            })
+                    _save_event_representation_stack(
+                        dset_path,dset_name,Trajectories,Images,EventImages,
+                        use_compress=use_compress)
+    finally:
+        if event_pool is not None:
+            event_pool.shutdown()
+
 
 def generate_rollouts(
         simulator:Simulator,controller:VehicleRateMPC,tXUd:np.ndarray,bframe:dict[str,np.ndarray,str|int|float],
@@ -259,7 +413,7 @@ def generate_rollouts(
     active_event_modalities,resolved_surface_options = (
         _resolve_requested_event_modalities(
             generate_events,event_modalities,event_surface_options))
-    event_enabled = bool(active_event_modalities)
+    event_enabled = generate_events or bool(active_event_modalities)
     kwargs = dict(
         simulator=simulator,controller=controller,tXUd=tXUd,bframe=bframe,
         Frames=Frames,Perturbations=Perturbations,dt_ro=dt_ro,
@@ -372,6 +526,7 @@ def _generate_rollouts_impl(
             else:
                 recorder = V2ERolloutRecorder(
                     staged_h5,expected_windows,
+                    retain_images=bool(event_modalities),
                     event_modalities=event_modalities,
                     event_surface_options=event_surface_options,
                     image_output_paths=output_paths)
@@ -419,15 +574,17 @@ def _generate_rollouts_impl(
                 future = event_pool.submit(
                     process_buffered_rollout,
                     frame_path,timestamps,close_windows,staged_h5,
-                    next(iter(output_paths.values())),expected_windows,
-                    event_modalities,event_surface_options,output_paths)
+                    next(iter(output_paths.values()),None),expected_windows,
+                    event_modalities,event_surface_options,output_paths,
+                    bool(event_modalities))
                 event_jobs.append((
                     rollout_id,future,frame_path,output_paths,staged_h5))
             elif generate_events:
-                for modality,event_stack in generated_event_images.items():
-                    EventImages[modality].append({
-                        modality:event_stack,"rollout_id":rollout_id,
-                        "event_surface_config":event_surface_options[modality]})
+                if event_modalities:
+                    for modality,event_stack in generated_event_images.items():
+                        EventImages[modality].append({
+                            modality:event_stack,"rollout_id":rollout_id,
+                            "event_surface_config":event_surface_options[modality]})
                 EventPaths.append(staged_h5)
 
             # Update the progress bar
@@ -541,6 +698,7 @@ def save_rollouts(cohort_name:str,course_name:str,
         for modality in EventImagesByModality:
             folder,_ = modality_storage(modality)
             os.makedirs(os.path.join(dset_path,folder),exist_ok=True)
+    if EventPaths is not None:
         os.makedirs(events_course_path,exist_ok=True)
 
     # Save the stacks
@@ -561,45 +719,29 @@ def save_rollouts(cohort_name:str,course_name:str,
         if len(lengths) != 1:
             raise ValueError("Event modality rollout counts do not match.")
         event_count = lengths.pop()
-        if EventPaths is None or len(EventPaths) != event_count:
+        if EventPaths is not None and len(EventPaths) != event_count:
             raise ValueError(
-                "Each accepted event rollout must have one staged H5 file.")
+                "Event image and raw event rollout counts do not match.")
+    if EventPaths is not None and len(EventPaths) != len(Trajectories):
+        raise ValueError(
+            "Each accepted rollout must have one staged H5 event stream.")
+    if EventImagesByModality is not None:
+        _save_event_representation_stack(
+            dset_path,dset_name,Trajectories,Images,
+            EventImagesByModality,use_compress=use_compress)
     if use_compress:
         Images = dch.compress_data(Images,key="rgb")
-        if EventImagesByModality is not None:
-            for modality,event_images in EventImagesByModality.items():
-                if not is_voxel_grid_modality(modality):
-                    dch.compress_data(event_images,key=modality)
     # Protocol 4 represents binary image buffers as bytes rather than text.
     # This avoids UTF-8 decoding failures for pixel values above 0x7f.
     torch.save(Trajectories, traj_path, pickle_protocol=4)
     torch.save(Images, imgs_path, pickle_protocol=4)
-    if EventImagesByModality is not None:
-        for modality,event_images in EventImagesByModality.items():
-            folder,prefix = modality_storage(modality)
-            event_stack_path = os.path.join(
-                dset_path,folder,prefix+dset_name+".pt")
-            if is_voxel_grid_modality(modality):
-                # Numpy arrays are embedded in torch.save's in-memory pickle.
-                # Tensors are written as separate streamed storage records,
-                # which keeps large memory-mapped voxel stacks disk-backed.
-                serialized_event_images = []
-                for event_image in event_images:
-                    serialized_event_image = dict(event_image)
-                    serialized_event_image[modality] = torch.from_numpy(
-                        event_image[modality])
-                    serialized_event_images.append(serialized_event_image)
-            else:
-                serialized_event_images = event_images
-            torch.save(
-                serialized_event_images,event_stack_path,pickle_protocol=4)
 
-        reference_images = next(iter(EventImagesByModality.values()))
-        accepted_ids = {rollout["rollout_id"] for rollout in reference_images}
+    if EventPaths is not None:
+        accepted_ids = {rollout["rollout_id"] for rollout in Trajectories}
         stack_pattern = re.compile(rf"^{re.escape(dset_name)}\d{{3}}\.h5$")
         for filename in os.listdir(events_course_path):
             if stack_pattern.fullmatch(filename) and filename[:-3] not in accepted_ids:
                 os.unlink(os.path.join(events_course_path,filename))
-        for staged_path,rollout in zip(EventPaths,reference_images):
+        for staged_path,rollout in zip(EventPaths,Trajectories):
             final_path = os.path.join(events_course_path,rollout["rollout_id"]+".h5")
             _replace_staged_file(staged_path,final_path)

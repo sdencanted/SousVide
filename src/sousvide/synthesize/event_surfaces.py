@@ -1,4 +1,4 @@
-"""NumPy event-surface accumulators derived from robotology/event-driven.
+"""Event-modality configuration and NumPy event-surface accumulators.
 
 The EROS and TOS update rules are Python adaptations of the BSD-3-Clause
 ``surface.h`` implementation from the Event Driven Perception for Robotics
@@ -17,12 +17,15 @@ import numpy as np
 
 
 EventModality = Literal[
-    "kronecker_delta", "event_bin", "event_eros", "event_tos",
+    "kronecker_delta", "event_pseudo_gaussian", "event_bilinear",
+    "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 ]
 
 EVENT_MODALITIES: tuple[EventModality, ...] = (
     "kronecker_delta",
+    "event_pseudo_gaussian",
+    "event_bilinear",
     "event_bin",
     "event_eros",
     "event_tos",
@@ -36,6 +39,8 @@ EVENT_SURFACE_MODALITIES: tuple[EventModality, ...] = (
 
 DEFAULT_EVENT_SURFACE_OPTIONS: dict[EventModality, dict[str, float | int]] = {
     "kronecker_delta": {},
+    "event_pseudo_gaussian": {"sigma": 1.0, "radius": 3},
+    "event_bilinear": {"sigma": 1.0, "radius": 3},
     "event_bin": {},
     "event_eros": {"kernel_size": 7, "decay": 0.3},
     "event_tos": {"kernel_size": 5, "parameter": 2.0},
@@ -100,6 +105,17 @@ def _validate_surface_options(
             "event_voxel_grid_polarity"):
         if options:
             raise ValueError(f"{modality} does not accept surface options.")
+        return
+
+    if modality in ("event_pseudo_gaussian", "event_bilinear"):
+        sigma = options.get("sigma")
+        radius = options.get("radius")
+        if (isinstance(sigma, bool) or not isinstance(sigma, (int, float))
+                or not np.isfinite(sigma) or float(sigma) <= 0.0):
+            raise ValueError("Gaussian sigma must be finite and positive.")
+        if (isinstance(radius, bool) or not isinstance(radius, int)
+                or not 1 <= radius <= 3):
+            raise ValueError("Gaussian radius must be an integer from 1 through 3.")
         return
 
     kernel_size = options.get("kernel_size")

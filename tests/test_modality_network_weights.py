@@ -63,6 +63,7 @@ class ModalityNetworkWeightTests(unittest.TestCase):
                 pilot_path,"commNet","grayscale"),
             os.path.join(pilot_path,"commNet_grayscale.pt"))
         for modality in (
+                "event_pseudo_gaussian","event_bilinear",
                 "event_bin","event_eros","event_tos",
                 "event_voxel_grid","event_voxel_grid_polarity"):
             self.assertEqual(

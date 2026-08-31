@@ -24,6 +24,8 @@ class CompressionTests(unittest.TestCase):
         for key, shape in (
             ("rgb", (2, 5, 7, 3)),
             ("kronecker_delta", (2, 5, 7)),
+            ("event_pseudo_gaussian", (2, 5, 7)),
+            ("event_bilinear", (2, 5, 7)),
             ("event_bin", (2, 5, 7)),
             ("event_eros", (2, 5, 7)),
             ("event_tos", (2, 5, 7)),
@@ -113,7 +115,9 @@ class ImageModalityTests(unittest.TestCase):
             with open(os.path.join(
                     course,"trajectories","trajectories001.pt"),"wb"):
                 pass
-            for modality in ("event_bin","event_eros","event_tos"):
+            for modality in (
+                    "event_pseudo_gaussian","event_bilinear",
+                    "event_bin","event_eros","event_tos"):
                 os.makedirs(os.path.join(course,modality))
                 path = os.path.join(course,modality,f"{modality}001.pt")
                 with open(path,"wb"):
