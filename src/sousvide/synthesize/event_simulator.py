@@ -12,8 +12,8 @@ from figs.dynamics.external_forces import ExternalForces
 from figs.simulator import Simulator
 from tqdm.auto import tqdm
 from sousvide.synthesize.image_modality import (
-    ImageModality,event_image_to_model_channels,is_event_modality,
-    validate_image_modality,
+    VisualModality,event_image_to_model_channels,is_event_cloud_modality,
+    is_event_modality,validate_visual_modality,
 )
 
 
@@ -26,7 +26,7 @@ class EventSimulator(Simulator):
 
     def simulate_with_events(
         self,policy,t0,tf,x0,event_frame_callback,warmup_steps,
-        warmup_policy=None,image_modality:ImageModality="rgb",
+        warmup_policy=None,image_modality:VisualModality="rgb",
     ):
         nw = 6
         rollout = self.conFiG["rollout"]
@@ -56,7 +56,7 @@ class EventSimulator(Simulator):
             mu_sn = np.array(sensor_noise["mean"])
             std_sn = np.array(sensor_noise["std"])
 
-        image_modality = validate_image_modality(image_modality)
+        image_modality = validate_visual_modality(image_modality)
         warmup_policy = warmup_policy or policy
         n_sim2ctl = int(hz_sim / policy.hz)
         if n_sim2ctl * policy.hz != hz_sim:
@@ -136,11 +136,17 @@ class EventSimulator(Simulator):
                     if event_image is None:
                         raise RuntimeError(
                             "Event callback did not return a control-boundary image.")
-                    policy_image = event_image_to_model_channels(
-                        event_image,image_modality)
+                    policy_image = (
+                        event_image
+                        if is_event_cloud_modality(image_modality)
+                        else event_image_to_model_channels(
+                            event_image,image_modality))
                 else:
                     policy_image = rgb
 
+                if (is_event_modality(image_modality)
+                        and hasattr(policy,"set_debug_rgb")):
+                    policy.set_debug_rgb(rgb)
                 ucr,tsol = policy.control(
                     tcr,xsn,ucr,policy_image,dpt,fts)
 

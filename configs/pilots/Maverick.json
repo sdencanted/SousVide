@@ -57,6 +57,17 @@
             "layers": {
                 "dropout": 0.1,
                 "sqnet_size": 1000,
+                "visual_backbones": {
+                    "default": "squeezenet1_1",
+                    "event_cloud": "secnet"
+                },
+                "secnet": {
+                    "num_points": 4096,
+                    "feature_dims": [32, 68, 140, 284],
+                    "group_counts": [512, 256, 128],
+                    "neighbors": 24,
+                    "stages": 3
+                },
                 "hidden_sizes": [512, 256, 128, 100, 100],
                 "cmd_aug_layer": 2
             }

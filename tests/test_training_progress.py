@@ -27,12 +27,14 @@ class TrainingProgressTests(unittest.TestCase):
             _estimate_epoch_completion([10.0],0,now=0.0),
             ("complete","0s"))
 
-    def test_training_progress_contains_labeled_eta_fields(self):
+    def test_training_progress_contains_live_tte_and_labeled_eta_fields(self):
         progress = get_training_progress()
         text_formats = [
             column.text_format for column in progress.columns
             if isinstance(column,TextColumn)
         ]
+        self.assertTrue(any(
+            "task.fields[tte]" in value for value in text_formats))
         self.assertTrue(any("task.fields[eta]" in value for value in text_formats))
         self.assertTrue(any(
             "task.fields[remaining]" in value for value in text_formats))

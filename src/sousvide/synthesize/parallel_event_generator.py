@@ -22,6 +22,8 @@ from sousvide.synthesize.event_surfaces import (
     resolve_event_surface_options,
     validate_event_modalities,
 )
+from sousvide.synthesize.event_cloud import (
+    events_to_event_cloud,resolve_event_cloud_options)
 
 
 class EventFrameBuffer:
@@ -104,12 +106,20 @@ def process_buffered_rollout(
 
 def process_event_stream_rollout(
         h5_path:str,window_end_times:tuple[float,...],height:int,width:int,
-        event_modalities,event_surface_options,event_output_paths:dict[str,str]):
+        event_modalities,event_surface_options,event_output_paths:dict[str,str],
+        event_cloud_options=None,stream_id:str|None=None):
     """Generate aligned event representations from one persisted v2e stream."""
-    modalities = validate_event_modalities(event_modalities)
+    requested = tuple(event_modalities)
+    has_event_cloud = "event_cloud" in requested
+    modalities = validate_event_modalities(
+        tuple(item for item in requested if item != "event_cloud")) \
+        if any(item != "event_cloud" for item in requested) else ()
     options = resolve_event_surface_options(
-        modalities,event_surface_options)
-    if set(event_output_paths) != set(modalities):
+        modalities,event_surface_options) if modalities else {}
+    cloud_options = (
+        resolve_event_cloud_options(event_cloud_options)
+        if has_event_cloud else None)
+    if set(event_output_paths) != set(requested):
         raise ValueError(
             "Event output paths must match the selected event modalities.")
     if height <= 0 or width <= 0:
@@ -135,7 +145,11 @@ def process_event_stream_rollout(
     for modality,path in event_output_paths.items():
         output_folder = os.path.dirname(path) or "."
         os.makedirs(output_folder,exist_ok=True)
-        if modality == "event_voxel_grid":
+        if modality == "event_cloud":
+            shape = (
+                len(boundaries_us),cloud_options["num_points"],4)
+            dtype = np.float32
+        elif modality == "event_voxel_grid":
             shape = (len(boundaries_us),5,height,width)
             dtype = np.float32
         elif modality == "event_voxel_grid_polarity":
@@ -152,6 +166,10 @@ def process_event_stream_rollout(
             modality,height,width,options[modality])
         for modality in modalities if modality in EVENT_SURFACE_MODALITIES}
     start_index = 0
+    raw_event_counts = np.zeros(len(boundaries_us),dtype=np.int64)
+    resolved_stream_id = (
+        os.path.splitext(os.path.basename(h5_path))[0]
+        if stream_id is None else str(stream_id))
     try:
         timestamps = stored_events[:,0]
         for window_index,boundary_us in enumerate(boundaries_us):
@@ -164,8 +182,14 @@ def process_event_stream_rollout(
                 events[:,3] = np.where(events[:,3] > 0,1.0,-1.0)
             for surface in surfaces.values():
                 surface.update(events)
-            for modality in modalities:
-                if modality == "kronecker_delta":
+            raw_event_counts[window_index] = len(events)
+            for modality in requested:
+                if modality == "event_cloud":
+                    image,_ = events_to_event_cloud(
+                        events,width,height,stream_id=resolved_stream_id,
+                        window_index=window_index,options=cloud_options,
+                        polarity_signed=True)
+                elif modality == "kronecker_delta":
                     image = events_to_kronecker(events,height,width)
                 elif modality == "event_pseudo_gaussian":
                     image = events_to_pseudo_gaussian(
@@ -195,4 +219,4 @@ def process_event_stream_rollout(
             if os.path.isfile(path):
                 os.unlink(path)
         raise
-    return event_output_paths
+    return event_output_paths,raw_event_counts

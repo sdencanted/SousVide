@@ -22,6 +22,8 @@ EventModality = Literal[
     "event_voxel_grid", "event_voxel_grid_polarity",
 ]
 
+EventRepresentation = EventModality | Literal["event_cloud"]
+
 EVENT_MODALITIES: tuple[EventModality, ...] = (
     "kronecker_delta",
     "event_pseudo_gaussian",
@@ -32,6 +34,9 @@ EVENT_MODALITIES: tuple[EventModality, ...] = (
     "event_voxel_grid",
     "event_voxel_grid_polarity",
 )
+
+EVENT_REPRESENTATIONS: tuple[EventRepresentation, ...] = (
+    *EVENT_MODALITIES, "event_cloud")
 
 EVENT_SURFACE_MODALITIES: tuple[EventModality, ...] = (
     "event_bin", "event_eros", "event_tos",
@@ -65,6 +70,26 @@ def validate_event_modalities(modalities) -> tuple[EventModality, ...]:
         raise ValueError(
             f"Unknown event modalities {unknown}; expected one of {EVENT_MODALITIES}."
         )
+    return tuple(dict.fromkeys(requested))
+
+
+def validate_event_representations(
+        representations) -> tuple[EventRepresentation, ...]:
+    """Validate raster event modalities plus the native event cloud."""
+    if isinstance(representations, str):
+        representations = (representations,)
+    try:
+        requested = tuple(representations)
+    except TypeError as error:
+        raise TypeError(
+            "event_modalities must be an iterable of strings.") from error
+    if not requested:
+        raise ValueError("event_modalities must contain at least one modality.")
+    unknown = [item for item in requested if item not in EVENT_REPRESENTATIONS]
+    if unknown:
+        raise ValueError(
+            f"Unknown event modalities {unknown}; expected one of "
+            f"{EVENT_REPRESENTATIONS}.")
     return tuple(dict.fromkeys(requested))
 
 

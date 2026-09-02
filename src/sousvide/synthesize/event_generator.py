@@ -15,8 +15,10 @@ from scipy.ndimage import gaussian_filter
 
 from sousvide.synthesize.event_surfaces import (
     EVENT_SURFACE_MODALITIES,EventModality,create_event_surface,
-    resolve_event_surface_options,validate_event_modalities,
+    resolve_event_surface_options,validate_event_representations,
 )
+from sousvide.synthesize.event_cloud import (
+    events_to_event_cloud,resolve_event_cloud_options)
 
 
 MIN_EVENTS_PER_IMAGE = 10
@@ -305,6 +307,8 @@ class V2ERolloutRecorder:
         event_modalities: tuple[EventModality, ...] | list[EventModality] | None = None,
         event_surface_options: dict[str,dict] | None = None,
         image_output_paths: dict[EventModality,str] | None = None,
+        event_cloud_options: dict | None = None,
+        stream_id: str = "online",
     ) -> None:
         self.h5_path = h5_path
         self.expected_windows = expected_windows
@@ -316,10 +320,18 @@ class V2ERolloutRecorder:
         else:
             requested_modalities = tuple(event_modalities)
         if requested_modalities:
-            self.event_modalities = validate_event_modalities(
+            self.event_modalities = validate_event_representations(
                 requested_modalities)
-            self.event_surface_options = resolve_event_surface_options(
-                self.event_modalities,event_surface_options)
+            raster_modalities = tuple(
+                item for item in self.event_modalities
+                if item != "event_cloud")
+            self.event_surface_options = (
+                resolve_event_surface_options(
+                    raster_modalities,event_surface_options)
+                if raster_modalities else {})
+            if not raster_modalities and event_surface_options:
+                raise ValueError(
+                    "event_surface_options requires a raster event modality.")
         else:
             if retain_images:
                 raise ValueError(
@@ -329,6 +341,14 @@ class V2ERolloutRecorder:
                     "event_surface_options requires at least one event modality.")
             self.event_modalities = ()
             self.event_surface_options = {}
+        self.event_cloud_options = (
+            resolve_event_cloud_options(event_cloud_options)
+            if "event_cloud" in self.event_modalities else None)
+        if "event_cloud" not in self.event_modalities and event_cloud_options:
+            raise ValueError(
+                "event_cloud_options requires the event_cloud modality.")
+        self.stream_id = str(stream_id)
+        self.raw_event_counts: list[int] = []
         if image_output_paths is not None and not retain_images:
             raise ValueError(
                 "image_output_paths cannot be used when retain_images=False.")
@@ -354,7 +374,7 @@ class V2ERolloutRecorder:
             if self.output_modality is not None else [])
         self._closed_images = None
         self._retain_window_events = any(
-            modality in WINDOW_EVENT_MODALITIES
+            modality in (*WINDOW_EVENT_MODALITIES,"event_cloud")
             for modality in self.event_modalities)
         self.window_count = 0
         self.closed = False
@@ -364,7 +384,12 @@ class V2ERolloutRecorder:
         for modality,path in self.image_output_paths.items():
             output_folder = os.path.dirname(path) or "."
             os.makedirs(output_folder,exist_ok=True)
-            if modality == "event_voxel_grid":
+            if modality == "event_cloud":
+                shape = (
+                    self.expected_windows,
+                    self.event_cloud_options["num_points"],4)
+                dtype = np.float32
+            elif modality == "event_voxel_grid":
                 shape = (self.expected_windows,VOXEL_GRID_BINS,
                          self.height,self.width)
                 dtype = np.float32
@@ -446,6 +471,13 @@ class V2ERolloutRecorder:
             combined = (
                 np.concatenate(self.window_events,axis=0)
                 if self.window_events else None)
+            if "event_cloud" in self.event_modalities:
+                cloud,raw_count = events_to_event_cloud(
+                    combined,self.width,self.height,
+                    stream_id=self.stream_id,window_index=self.window_count,
+                    options=self.event_cloud_options,polarity_signed=True)
+                boundary_images["event_cloud"] = cloud
+                self.raw_event_counts.append(raw_count)
             if "kronecker_delta" in self.event_modalities:
                 boundary_images["kronecker_delta"] = events_to_kronecker(
                     combined,self.height,self.width)
@@ -514,7 +546,8 @@ class V2ERolloutRecorder:
                 self._closed_images = {
                     modality:np.stack(images,axis=0).astype(
                         np.float32
-                        if modality in VOXEL_GRID_MODALITIES else np.uint8,
+                        if modality in (*VOXEL_GRID_MODALITIES,"event_cloud")
+                        else np.uint8,
                         copy=False)
                     for modality,images in self.images_by_modality.items()
                 }
@@ -548,3 +581,19 @@ class OnlineEventImageGenerator(V2ERolloutRecorder):
             device=device,retain_images=False,
             event_modalities=(image_modality,),
             event_surface_options=event_surface_options)
+
+
+class OnlineEventCloudGenerator(V2ERolloutRecorder):
+    """Generate fixed SECNet event clouds at online control boundaries."""
+
+    def __init__(self,expected_windows:int,device:str|None=None,
+                 event_cloud_options:dict|None=None,
+                 stream_id:str="online",
+                 emulator_factory:Callable[...,object]|None=None) -> None:
+        super().__init__(
+            h5_path=None,expected_windows=expected_windows,
+            emulator_factory=emulator_factory,device=device,
+            retain_images=False,
+            event_modalities=("event_cloud",),
+            event_cloud_options=event_cloud_options,
+            stream_id=stream_id)

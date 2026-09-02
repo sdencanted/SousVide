@@ -18,9 +18,12 @@ from sousvide.synthesize.event_generator import V2ERolloutRecorder
 from sousvide.synthesize.event_simulator import EventSimulator
 from sousvide.synthesize.event_surfaces import (
     resolve_event_surface_options,validate_event_modalities,
+    validate_event_representations,
 )
+from sousvide.synthesize.event_cloud import (
+    event_cloud_metadata,resolve_event_cloud_options)
 from sousvide.synthesize.image_modality import (
-    is_voxel_grid_modality,modality_storage)
+    is_event_cloud_modality,is_voxel_grid_modality,modality_storage)
 from sousvide.synthesize.parallel_event_generator import (
     EventFrameBuffer,
     process_buffered_rollout,
@@ -255,9 +258,11 @@ def _save_event_representation_stack(
         folder,prefix = modality_storage(modality)
         output_folder = os.path.join(dset_path,folder)
         os.makedirs(output_folder,exist_ok=True)
-        if use_compress and not is_voxel_grid_modality(modality):
+        if (use_compress and not is_voxel_grid_modality(modality)
+                and not is_event_cloud_modality(modality)):
             dch.compress_data(event_images,key=modality)
-        if is_voxel_grid_modality(modality):
+        if (is_voxel_grid_modality(modality)
+                or is_event_cloud_modality(modality)):
             # Tensor storage keeps large memory-mapped stacks disk-backed
             # while torch.save streams them to the final artifact.
             serialized_event_images = []
@@ -278,6 +283,7 @@ def generate_event_representations(
         cohort_name:str,course_names:list[str],event_modalities,
         event_workers:int=1,
         event_surface_options:dict[str,dict]|None=None,
+        event_cloud_options:dict|None=None,
         use_compress:bool=False) -> None:
     """Derive aligned event-image stacks from saved rollout H5 streams.
 
@@ -288,9 +294,22 @@ def generate_event_representations(
     """
     if event_workers < 1:
         raise ValueError("event_workers must be at least 1.")
-    modalities = validate_event_modalities(event_modalities)
-    resolved_options = resolve_event_surface_options(
-        modalities,event_surface_options)
+    modalities = validate_event_representations(event_modalities)
+    raster_modalities = tuple(
+        modality for modality in modalities if modality != "event_cloud")
+    resolved_options = (
+        resolve_event_surface_options(
+            raster_modalities,event_surface_options)
+        if raster_modalities else {})
+    if not raster_modalities and event_surface_options:
+        raise ValueError(
+            "event_surface_options requires at least one raster event modality.")
+    resolved_cloud_options = (
+        resolve_event_cloud_options(event_cloud_options)
+        if "event_cloud" in modalities else None)
+    if "event_cloud" not in modalities and event_cloud_options:
+        raise ValueError(
+            "event_cloud_options requires the event_cloud modality.")
     workspace_path = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -365,7 +384,8 @@ def generate_event_representations(
                             for modality in modalities}
                         args = (
                             h5_path,window_end_times,rgb.shape[1],rgb.shape[2],
-                            modalities,resolved_options,output_paths)
+                            modalities,resolved_options,output_paths,
+                            resolved_cloud_options,rollout_id)
                         if event_pool is None:
                             jobs.append(process_event_stream_rollout(*args))
                         else:
@@ -376,15 +396,28 @@ def generate_event_representations(
                         jobs if event_pool is None
                         else [future.result() for future in jobs])
                     EventImages = {modality:[] for modality in modalities}
-                    for trajectory,output_paths in zip(
+                    for trajectory,completed_output in zip(
                             Trajectories,completed_outputs):
                         rollout_id = trajectory["rollout_id"]
+                        output_paths,raw_event_counts = completed_output
                         for modality,path in output_paths.items():
+                            representation_config = (
+                                event_cloud_metadata(resolved_cloud_options)
+                                if modality == "event_cloud"
+                                else resolved_options[modality])
                             EventImages[modality].append({
                                 modality:np.load(
                                     path,mmap_mode="r+",allow_pickle=False),
                                 "rollout_id":rollout_id,
-                                "event_surface_config":resolved_options[modality],
+                                "event_surface_config":(
+                                    {} if modality == "event_cloud"
+                                    else representation_config),
+                                "event_cloud_config":(
+                                    representation_config
+                                    if modality == "event_cloud" else {}),
+                                "raw_event_counts":(
+                                    raw_event_counts
+                                    if modality == "event_cloud" else None),
                             })
                     _save_event_representation_stack(
                         dset_path,dset_name,Trajectories,Images,EventImages,

@@ -99,6 +99,56 @@ Select either name as `image_modality` when generating observations, training,
 or deploying. Each representation is stored independently and presented to
 existing RGB backbones as three repeated grayscale channels.
 
+## Train CommNet with SECNet event clouds
+
+`event_cloud` uses the native SECNet encoder while every dense modality keeps
+the SqueezeNet backbone. Generate clouds from the raw HDF5 streams after
+rollout generation, then use the same options for observations, training, and
+deployment:
+
+```python
+import sousvide.synthesize.rollout_generator as rg
+import sousvide.synthesize.observation_generator as og
+import sousvide.instruct.train_policy as tp
+import sousvide.flight.deploy_figs as df
+
+cloud_options = {"num_points": 4096, "seed": 0}
+
+rg.generate_event_representations(
+    cohort_name=cohort,
+    course_names=courses,
+    event_modalities=("event_cloud",),
+    event_cloud_options=cloud_options,
+    event_workers=10,
+)
+og.generate_observation_data(
+    cohort, roster, networks=["commNet"],
+    image_modality="event_cloud",
+    event_cloud_options=cloud_options,
+)
+tp.train_roster(
+    cohort, roster, "commNet", 300,
+    image_modality="event_cloud",
+    event_cloud_options=cloud_options,
+    precision="float32",
+    compile_mode="none",
+)
+df.deploy_roster(
+    cohort, course, scene, method, roster,
+    image_modality="event_cloud",
+    event_cloud_options=cloud_options,
+)
+```
+
+Clouds are saved as float32 `[control_window, point, (t,x,y,p)]` tensors in
+`rollout_data/<course>/event_cloud/`. SECNet CommNet checkpoints are stored as
+`commNet_event_cloud.pt` and are always trained separately from SqueezeNet
+checkpoints. The initial SECNet path supports float32 without `torch.compile`;
+use `scripts/profile_networks.py --image-modality event_cloud --device cuda`
+on the deployment GPU to measure the CommNet component. Deployment readiness
+also requires an end-to-end online-v2e preprocessing and inference p95 below
+the 50 ms control period on the target machine.
+
 
 ## [COMING SOON: Oct 2025] Deploy SOUS VIDE in the Real World
 Deploy SOUS VIDE policies on an [MSL Drone](https://github.com/StanfordMSL/TrajBridge/wiki/3.-Drone-Hardware). Tutorial and code coming soon!

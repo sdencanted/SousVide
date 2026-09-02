@@ -3,7 +3,7 @@
 import numpy as np
 
 from sousvide.synthesize.image_modality import (
-    image_modality_channels,is_voxel_grid_modality)
+    image_modality_channels,is_event_cloud_modality,is_voxel_grid_modality)
 
 
 def validate_aligned_rollouts(
@@ -28,6 +28,21 @@ def validate_aligned_rollouts(
         ndata = trajectory["Ndata"]
         if rgb.shape[0] != ndata or event_frames.shape[0] != ndata:
             raise ValueError(f"Frame count mismatch for rollout {rollout_id}.")
+        if is_event_cloud_modality(image_modality):
+            if (event_frames.dtype != np.float32 or event_frames.ndim != 3
+                    or event_frames.shape[2] != 4):
+                raise ValueError(
+                    "event_cloud arrays must have float32 (N,P,4) format.")
+            config = event_data.get("event_cloud_config",{})
+            if config.get("num_points") != event_frames.shape[1]:
+                raise ValueError(
+                    f"event_cloud point count does not match its config for {rollout_id}.")
+            raw_counts = event_data.get("raw_event_counts")
+            if (raw_counts is None or len(raw_counts) != ndata
+                    or np.any(np.asarray(raw_counts) < 0)):
+                raise ValueError(
+                    f"event_cloud raw event counts are invalid for {rollout_id}.")
+            continue
         if is_voxel_grid_modality(image_modality):
             channels = image_modality_channels(image_modality)
             if (event_frames.dtype != np.float32 or event_frames.ndim != 4

@@ -34,6 +34,8 @@ class VoxelModelTests(unittest.TestCase):
                 "current":torch.zeros(1,11),
                 "feature_vector":torch.zeros(1,8),
             },network.io_idxs["xdp"])
+            # Legacy full-object SqueezeNet checkpoints predate this metadata.
+            del network.visual_input_key
             self.assertEqual(network(inputs)["command"].shape,(1,4))
 
     def test_factory_rejects_dino_voxel_input(self):

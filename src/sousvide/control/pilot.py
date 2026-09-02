@@ -10,8 +10,9 @@ from figs.control.base_controller import BaseController
 from albumentations.pytorch import ToTensorV2
 from sousvide.control.policy import Policy
 from sousvide.synthesize.image_modality import (
-    ImageModality,image_modality_channels,is_voxel_grid_modality,
-    is_grayscale_modality,rgb_to_grayscale,validate_image_modality)
+    VisualModality,image_modality_channels,is_event_cloud_modality,
+    is_voxel_grid_modality,is_grayscale_modality,rgb_to_grayscale,
+    validate_visual_modality)
 
 
 def _normalize_voxel_grid(image:torch.Tensor) -> torch.Tensor:
@@ -32,7 +33,8 @@ def _normalize_voxel_grid(image:torch.Tensor) -> torch.Tensor:
 class Pilot(BaseController):
     def __init__(self,cohort_name:str,pilot_name:str,
                  hz:int=20,Ntxu:int=15,Nft:int=6,
-                 image_modality:ImageModality="rgb",
+                 image_modality:VisualModality="rgb",
+                 event_cloud_options:dict|None=None,
                  require_commnet_weights:bool=False):
         """
         Initializes a pilot object. 
@@ -80,12 +82,13 @@ class Pilot(BaseController):
             os.makedirs(pilot_path, exist_ok=True)
             
         # Initialize pytorch variables
-        image_modality = validate_image_modality(image_modality)
+        image_modality = validate_visual_modality(image_modality)
         profile = ch.get_config(pilot_name,"pilots")
         
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         policy = Policy(
             profile,pilot_name,pilot_path,image_modality=image_modality,
+            event_cloud_options=event_cloud_options,
             require_commnet_weights=require_commnet_weights).to(device)
 
         # Initialize sequence variables
@@ -98,21 +101,35 @@ class Pilot(BaseController):
         }
 
         # Initialize image processing variables
-        transform_steps = [A.Resize(256,256),A.CenterCrop(224,224)]
-        if not is_voxel_grid_modality(image_modality):
-            transform_steps.append(A.Normalize(
-                mean=(0.485,0.456,0.406),std=(0.229,0.224,0.225)))
-        transform_steps.append(ToTensorV2())
-        transform = A.Compose(transform_steps)
-        if is_voxel_grid_modality(image_modality):
-            process_image = lambda x:_normalize_voxel_grid(
-                transform(image=x)["image"])
-        elif is_grayscale_modality(image_modality):
-            process_image = lambda x:transform(
-                image=rgb_to_grayscale(x))["image"]
+        if is_event_cloud_modality(image_modality):
+            commnet = (
+                policy.networks["commNet"]
+                if "commNet" in policy.networks else None)
+            if commnet is None or "event_cloud" not in commnet.io_idxs["xdp"]:
+                raise ValueError(
+                    "event_cloud pilots require an SECNet CommNet configuration.")
+            cloud_dims = commnet.get_io_dims()["xdp"]["event_cloud"]
+            cloud_dim = [1,*cloud_dims]
+            process_image = lambda x:torch.as_tensor(
+                x,dtype=torch.float32).contiguous()
+            img_dim = [1,3,224,224]
         else:
-            process_image = lambda x:transform(image=x)["image"]
-        img_dim = [1,image_modality_channels(image_modality),224,224]
+            transform_steps = [A.Resize(256,256),A.CenterCrop(224,224)]
+            if not is_voxel_grid_modality(image_modality):
+                transform_steps.append(A.Normalize(
+                    mean=(0.485,0.456,0.406),std=(0.229,0.224,0.225)))
+            transform_steps.append(ToTensorV2())
+            transform = A.Compose(transform_steps)
+            if is_voxel_grid_modality(image_modality):
+                process_image = lambda x:_normalize_voxel_grid(
+                    transform(image=x)["image"])
+            elif is_grayscale_modality(image_modality):
+                process_image = lambda x:transform(
+                    image=rgb_to_grayscale(x))["image"]
+            else:
+                process_image = lambda x:transform(image=x)["image"]
+            img_dim = [1,image_modality_channels(image_modality),224,224]
+            cloud_dim = [1,1,4]
 
         ## Class Variables =================================================================================================
         
@@ -130,6 +147,7 @@ class Pilot(BaseController):
         # Policy Input Variables
         self.txu_cr = torch.zeros((1,Ntxu)).to(device)          # Current Time,State and Input
         self.rgb_cr = torch.zeros(img_dim).to(device)           # Current Image
+        self.event_cloud_cr = torch.zeros(cloud_dim).to(device) # Current event cloud
         self.fts_cr = torch.zeros((1,6)).to(device)             # Current Force/Torque sensor data
 
         # Feature Map Variables
@@ -219,6 +237,7 @@ class Pilot(BaseController):
         self.fts_pr = self.fts_cr = fts0
         self.pch_pr = self.pch_cr = pch0
         self.cls_pr = self.cls_cr = cls0
+        self.event_cloud_cr.zero_()
 
         for i in range(self.Sqc["ekf"].shape[1]):
             self.Sqc["ekf"][0,i,0] = 0.0
@@ -253,11 +272,19 @@ class Pilot(BaseController):
         x_cr = torch.from_numpy(x_cr).float().to(self.device).unsqueeze(0)
         u_pr = torch.tensor(u_pr,dtype=torch.float32).to(self.device).unsqueeze(0)
 
-        # Process image if it is not downsampled
-        if rgb_cr is None or rgb_cr.shape != self.rgb_cr.shape:
-            rgb_cr = self.process_image(rgb_cr)
+        if is_event_cloud_modality(self.image_modality):
+            if rgb_cr is None:
+                raise ValueError("event_cloud pilots require an event cloud input.")
+            event_cloud = self.process_image(rgb_cr)
+            if tuple(event_cloud.shape) != tuple(self.event_cloud_cr.shape[1:]):
+                raise ValueError(
+                    "Event cloud input does not match the configured (N,4) shape.")
         else:
-            rgb_cr = torch.from_numpy(rgb_cr).float()
+            # Process image if it is not downsampled
+            if rgb_cr is None or rgb_cr.shape != self.rgb_cr.shape:
+                rgb_cr = self.process_image(rgb_cr)
+            else:
+                rgb_cr = torch.from_numpy(rgb_cr).float()
         # Depth image is not used in the pilot, so we ignore it
         _ = dpt_cr
 
@@ -272,7 +299,10 @@ class Pilot(BaseController):
 
         # Update current variables
         self.txu_cr[0,0],self.txu_cr[0,1:11] = t_cr,x_cr        
-        self.rgb_cr[0,:,:,:] = rgb_cr
+        if is_event_cloud_modality(self.image_modality):
+            self.event_cloud_cr[0] = event_cloud.to(self.device)
+        else:
+            self.rgb_cr[0,:,:,:] = rgb_cr
         self.fts_cr = fts_cr
 
     def retain(self):
@@ -324,6 +354,7 @@ class Pilot(BaseController):
         # Collate into a list of inputs to the neural network model
         Xnn = {
             "current": xnn_tx, "rgb_image": xnn_rgb, "wrench": xnn_fts,
+            "event_cloud": self.event_cloud_cr,
             "dynamics": xnn_ekf, "wrenches": xnn_cft, "patches": xnn_map, "class_token": xnn_tok
         }
         

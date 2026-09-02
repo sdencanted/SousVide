@@ -1,5 +1,25 @@
 # Third-party notices
 
+## SECNet event-cloud encoder
+
+The native SECNet encoder in `src/sousvide/control/networks/secnet.py` is
+adapted with permission from the SECNet_ICML reference implementation at
+commit `0638bb18776f5cdb44912770f8f117c96e59b684`:
+https://github.com/rhwxmx/SECNet_ICML.
+
+The adaptation uses the embedding, event grouping and sampling, spatial and
+temporal frequency transforms, attention aggregation, residual, and global
+pooling components. The upstream classifier, data processing programs,
+training program, and optional PointNet2 extension are not included.
+
+Paper: "Scalable Event Cloud Network for Event-based Classification",
+Hongwei Ren et al., ICML 2026, https://arxiv.org/abs/2412.20803.
+
+Adaptation and redistribution permission was provided to the SousVide project
+under GPLv3-compatible terms. The permission record is maintained with the
+project's legal records. The adapted source is distributed under this
+repository's GNU General Public License v3.0.
+
 ## rpg_e2vid voxel-grid voting
 
 The NumPy temporal voxel-grid implementations in this repository are derived

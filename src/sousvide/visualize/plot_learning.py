@@ -6,7 +6,7 @@ import torch
 import sousvide.visualize.plot_3D as p3
 import sousvide.visualize.rich_utilities as ru
 import sousvide.flight.flight_helper as fh
-from sousvide.synthesize.image_modality import validate_image_modality
+from sousvide.synthesize.image_modality import validate_visual_modality
 
 from typing import List
 
@@ -17,7 +17,7 @@ def plot_losses(cohort_name:str, roster:List[str], network_name:str,
     """
 
     if image_modality is not None:
-        image_modality = validate_image_modality(image_modality)
+        image_modality = validate_visual_modality(image_modality)
 
     # Initialize the rich variables
     console = ru.get_console()

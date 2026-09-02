@@ -5,7 +5,7 @@ from collections.abc import Iterator,Sequence
 from typing import Any
 from torch.utils.data import ConcatDataset,Dataset,Sampler
 from sousvide.synthesize.image_modality import (
-    ImageModality,uses_modality_observation_folder,validate_image_modality)
+    VisualModality,uses_modality_observation_folder,validate_visual_modality)
 
 
 OBSERVATION_FORMAT_VERSION = 2
@@ -183,10 +183,10 @@ def get_data_paths(cohort_name:str,
                    student_name:str,
                    topic_name:str,
                    course_name:str|None=None,
-                   image_modality:ImageModality="rgb"
+                   image_modality:VisualModality="rgb"
                    ) -> tuple[list[str],list[str]]:
     """Return the file-local train/test split for an observation topic."""
-    image_modality = validate_image_modality(image_modality)
+    image_modality = validate_visual_modality(image_modality)
     workspace_path = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     topic_parts = [workspace_path,"cohorts",cohort_name,"observation_data",student_name]

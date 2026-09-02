@@ -10,5 +10,8 @@
     ],
     "patches": [
         [ null ], [ null ], [ null ]
+    ],
+    "event_cloud": [
+        [ null ], [ "t", "x", "y", "p" ]
     ]
 }

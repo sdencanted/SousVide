@@ -62,6 +62,10 @@ class ModalityNetworkWeightTests(unittest.TestCase):
             network_factory.get_network_path(
                 pilot_path,"commNet","grayscale"),
             os.path.join(pilot_path,"commNet_grayscale.pt"))
+        self.assertEqual(
+            network_factory.get_network_path(
+                pilot_path,"commNet","event_cloud"),
+            os.path.join(pilot_path,"commNet_event_cloud.pt"))
         for modality in (
                 "event_pseudo_gaussian","event_bilinear",
                 "event_bin","event_eros","event_tos",
@@ -105,6 +109,24 @@ class ModalityNetworkWeightTests(unittest.TestCase):
             self.assertEqual(
                 network_factory.get_network_load_path(
                     pilot_path,"commNet","kronecker_delta"),expected_path)
+
+    def test_event_cloud_never_loads_a_legacy_commnet(self):
+        with tempfile.TemporaryDirectory() as pilot_path:
+            open(os.path.join(pilot_path,"commNet.pt"),"wb").close()
+            torch.save(
+                {"log":{"image_modality":"event_cloud"}},
+                os.path.join(pilot_path,"losses_commNet.pt"))
+            expected_path = os.path.join(
+                pilot_path,"commNet_event_cloud.pt")
+
+            self.assertEqual(
+                network_factory.get_network_load_path(
+                    pilot_path,"commNet","event_cloud"),expected_path)
+            with self.assertRaisesRegex(FileNotFoundError,"Train commNet"):
+                network_factory.generate_network(
+                    {"network_type":"unused"},"commNet",pilot_path,
+                    image_modality="event_cloud",
+                    require_commnet_weights=True)
 
     def test_legacy_commnet_uses_recorded_kronecker_modality(self):
         with tempfile.TemporaryDirectory() as pilot_path:

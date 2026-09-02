@@ -37,6 +37,9 @@ def get_training_progress() -> Progress:
     progress = Progress(
         SpinnerColumn(),
         TextColumn("{task.description} | [bold dark_green]Loss[/]: [dark_green]{task.fields[loss]:.4f}[/]"),
+        TextColumn(
+            "[bold bright_green]TTE[/]: "
+            "[bright_green]{task.fields[tte]}[/]"),
         BarColumn(),
         TextColumn("[bold green3] {task.completed:>2}/{task.total} {task.fields[units]}"),
         TextColumn("[bold cyan]ETA[/]: [cyan]{task.fields[eta]}[/]"),

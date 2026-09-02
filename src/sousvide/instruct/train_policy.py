@@ -23,8 +23,11 @@ from sousvide.instruct.losses import LossFn
 from sousvide.instruct.synthesized_data import (
     generate_dataset,generate_grouped_dataset,get_data_paths)
 from sousvide.synthesize.image_modality import (
-    ImageModality,is_event_modality,validate_image_modality)
+    VisualModality,is_event_cloud_modality,is_event_modality,
+    validate_visual_modality)
 from sousvide.synthesize.event_surfaces import resolve_event_surface_options
+from sousvide.synthesize.event_cloud import (
+    event_cloud_metadata,resolve_event_cloud_options)
 
 
 CompileMode = Literal["none","default","reduce-overhead"]
@@ -119,7 +122,7 @@ def _create_dataloader(dataset,batch_size:int|None,shuffle:bool,
 
 def _observation_data_available(
         cohort_name:str,student_name:str,network_name:str,
-        image_modality:ImageModality) -> bool:
+        image_modality:VisualModality) -> bool:
     try:
         train_paths,test_paths = get_data_paths(
             cohort_name,student_name,network_name,
@@ -306,15 +309,24 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
                  regen:RegenMode=False,
                  deployment:None|tuple[str,str,str]=None,
                  lim_sv:int=50,lr:float=1e-4,batch_size:int=64,
-                 image_modality:ImageModality="rgb",
+                 image_modality:VisualModality="rgb",
                  dataloader_num_workers:int=4,
                  compile_mode:CompileMode="none",
                  precision:Precision="float32",
                  persistent_dataloader:bool=False,
                  cuda_prefetch:bool=False,seed:int=0,
                  numerical_mode:NumericalMode="modern",
-                 event_surface_options:dict[str,dict]|None=None):
-    image_modality = validate_image_modality(image_modality)
+                 event_surface_options:dict[str,dict]|None=None,
+                 event_cloud_options:dict|None=None):
+    image_modality = validate_visual_modality(image_modality)
+    if is_event_cloud_modality(image_modality) and (
+            compile_mode != "none" or precision != "float32"):
+        raise ValueError(
+            "event_cloud SECNet training requires compile_mode='none' "
+            "and precision='float32'.")
+    if is_event_cloud_modality(image_modality) and event_surface_options:
+        raise ValueError(
+            "event_surface_options cannot be used with image_modality='event_cloud'.")
     _validate_dataloader_num_workers(dataloader_num_workers)
     _validate_runtime_options(compile_mode,precision,regen)
     _validate_numerical_mode_options(
@@ -335,9 +347,12 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
         ]
     if generation_roster:
         console.print("Regenerating observation data...")
+        observation_kwargs = {
+            "networks":[network_name],"image_modality":image_modality}
+        if is_event_cloud_modality(image_modality):
+            observation_kwargs["event_cloud_options"] = event_cloud_options
         og.generate_observation_data(
-            cohort_name,generation_roster,networks=[network_name],
-            image_modality=image_modality)
+            cohort_name,generation_roster,**observation_kwargs)
     else:
         console.print("Using existing observation data...")
     observation_generation_seconds = time.perf_counter()-generation_start
@@ -347,7 +362,7 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
             student_desc = f"[bold green3]{student:>8} > {network_name}[/]"
             student_task = progress.add_task(
                 student_desc,total=Neps,loss=0.0,units="epochs",
-                eta="calculating...",remaining="--")
+                tte="--",eta="calculating...",remaining="--")
             train_student(
                 cohort_name,student,network_name,Neps,
                 deployment=deployment,lim_sv=lim_sv,lr=lr,
@@ -359,6 +374,7 @@ def train_roster(cohort_name:str,roster:list[str],network_name:str,Neps:int,
                 cuda_prefetch=cuda_prefetch,seed=seed,
                 numerical_mode=numerical_mode,
                 event_surface_options=event_surface_options,
+                event_cloud_options=event_cloud_options,
                 observation_generation_seconds=observation_generation_seconds)
             progress.refresh()
 
@@ -367,7 +383,7 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                   deployment:None|tuple[str,str,str]=None,
                   lim_sv:int=10,lr:float=1e-4,batch_size:int=64,
                   progress_bar:tuple[Progress,int]|None=None,
-                  image_modality:ImageModality="rgb",
+                  image_modality:VisualModality="rgb",
                   dataloader_num_workers:int=4,
                   compile_mode:CompileMode="none",
                   precision:Precision="float32",
@@ -375,12 +391,28 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                   cuda_prefetch:bool=False,seed:int=0,
                   numerical_mode:NumericalMode="modern",
                   event_surface_options:dict[str,dict]|None=None,
+                  event_cloud_options:dict|None=None,
                   observation_generation_seconds:float=0.0) -> None:
-    image_modality = validate_image_modality(image_modality)
+    image_modality = validate_visual_modality(image_modality)
     resolved_event_surface_options = (
         resolve_event_surface_options(
             (image_modality,),event_surface_options)
-        if is_event_modality(image_modality) else {})
+        if (is_event_modality(image_modality)
+            and not is_event_cloud_modality(image_modality)) else {})
+    resolved_event_cloud_options = (
+        resolve_event_cloud_options(event_cloud_options)
+        if is_event_cloud_modality(image_modality) else None)
+    if not is_event_cloud_modality(image_modality) and event_cloud_options:
+        raise ValueError(
+            "event_cloud_options requires image_modality='event_cloud'.")
+    if is_event_cloud_modality(image_modality) and event_surface_options:
+        raise ValueError(
+            "event_surface_options cannot be used with image_modality='event_cloud'.")
+    if is_event_cloud_modality(image_modality) and (
+            compile_mode != "none" or precision != "float32"):
+        raise ValueError(
+            "event_cloud SECNet training requires compile_mode='none' "
+            "and precision='float32'.")
     _validate_dataloader_num_workers(dataloader_num_workers)
     _validate_runtime_options(compile_mode,precision,False)
     _validate_numerical_mode_options(
@@ -394,7 +426,8 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
         raise RuntimeError("bfloat16 training requires a CUDA device.")
     criterion = LossFn()
     student = Pilot(
-        cohort_name,student_name,image_modality=image_modality)
+        cohort_name,student_name,image_modality=image_modality,
+        event_cloud_options=resolved_event_cloud_options)
 
     if network_name not in student.policy.networks:
         if progress_bar is not None:
@@ -446,10 +479,16 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                 cohort_name,course,scene,eval_method,[student_name],
                 mode="evaluate",image_modality=image_modality,
                 event_surface_options=resolved_event_surface_options,
+                event_cloud_options=resolved_event_cloud_options,
                 require_commnet_weights=numerical_mode != "original")
         setup_timings["initial_deployment_seconds"] = (
             time.perf_counter()-deployment_start)
-        Eval_tte.append((0,metric[student_name]["TTE"]["mean"]))
+        initial_tte = metric[student_name]["TTE"]["mean"]
+        Eval_tte.append((0,initial_tte))
+        if progress_bar is not None:
+            progress,student_task = progress_bar
+            progress.update(student_task,tte=f"{initial_tte:.2f}")
+            progress.refresh()
 
         # The legacy trainer records checkpoint zero after its initial
         # deployment. Keep modality-specific names to prevent RGB/event
@@ -467,6 +506,15 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
     od_train_files,od_test_files = get_data_paths(
         cohort_name,student.name,network_name,
         image_modality=image_modality)
+    if is_event_cloud_modality(image_modality):
+        expected_cloud_config = event_cloud_metadata(
+            resolved_event_cloud_options)
+        for data_path in dict.fromkeys((*od_train_files,*od_test_files)):
+            observation_data = torch.load(
+                data_path,map_location="cpu",weights_only=False,mmap=True)
+            if observation_data.get("event_cloud_config") != expected_cloud_config:
+                raise ValueError(
+                    f"Event cloud configuration mismatch in '{data_path}'.")
     if numerical_mode == "original":
         # Preserve the original file-local DataLoader iteration pattern. Each
         # iterator consumes the same global RNG draws as the legacy loop, while
@@ -506,6 +554,9 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
         "network":network_name,"image_modality":image_modality,
         "event_surface_config":resolved_event_surface_options.get(
             image_modality,{}),
+        "event_cloud_config":event_cloud_metadata(
+            resolved_event_cloud_options)
+            if is_event_cloud_modality(image_modality) else {},
         "numerical_mode":numerical_mode,
         "compile_mode":compile_mode,"precision":precision,
         "batch_size":batch_size,
@@ -650,10 +701,15 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
                         cohort_name,course,scene,eval_method,[student_name],
                         mode="evaluate",image_modality=image_modality,
                         event_surface_options=resolved_event_surface_options,
+                        event_cloud_options=resolved_event_cloud_options,
                         require_commnet_weights=numerical_mode != "original")
                 deployment_seconds = time.perf_counter()-deployment_start
-                Eval_tte.append(
-                    (ep+1,metric[student_name]["TTE"]["mean"]))
+                eval_tte = metric[student_name]["TTE"]["mean"]
+                Eval_tte.append((ep+1,eval_tte))
+                if progress_bar is not None:
+                    progress,student_task = progress_bar
+                    progress.update(student_task,tte=f"{eval_tte:.2f}")
+                    progress.refresh()
             elif numerical_mode == "original":
                 Eval_tte.append([])
 

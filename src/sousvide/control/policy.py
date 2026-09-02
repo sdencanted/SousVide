@@ -1,3 +1,4 @@
+import copy
 import torch
 import sousvide.control.network_factory as nf
 import sousvide.control.network_helper as nh
@@ -5,14 +6,17 @@ import sousvide.control.network_helper as nh
 from torch import nn
 from sousvide.control.networks.base_net import BaseNet
 import sousvide.visualize.rich_utilities as ru
-from sousvide.synthesize.image_modality import ImageModality,validate_image_modality
+from sousvide.synthesize.event_cloud import resolve_event_cloud_options
+from sousvide.synthesize.image_modality import (
+    VisualModality,is_event_cloud_modality,validate_visual_modality)
 
 class Policy(nn.Module):
     def __init__(self,
                  policy_config:dict[str,dict],
                  policy_name:str,
                  policy_path:str,
-                 image_modality:ImageModality="rgb",
+                 image_modality:VisualModality="rgb",
+                 event_cloud_options:dict|None=None,
                  require_commnet_weights:bool=False):
         """
         Initialize a Learned Control Policy.
@@ -36,14 +40,43 @@ class Policy(nn.Module):
         super().__init__()
 
         # Populate the network
-        image_modality = validate_image_modality(image_modality)
+        image_modality = validate_visual_modality(image_modality)
+        if is_event_cloud_modality(image_modality):
+            resolved_cloud_options = resolve_event_cloud_options(
+                event_cloud_options)
+        else:
+            if event_cloud_options:
+                raise ValueError(
+                    "event_cloud_options requires image_modality='event_cloud'.")
+            resolved_cloud_options = None
         networks:dict[str,BaseNet] = nn.ModuleDict()
         network_paths = {}
         Nhy = 1
         for name,config in policy_config["networks"].items():
+            config = copy.deepcopy(config)
+            if (name == "commNet"
+                    and is_event_cloud_modality(image_modality)):
+                config.setdefault("layers",{}).setdefault("secnet",{})[
+                    "num_points"] = resolved_cloud_options["num_points"]
             networks[name] = nf.generate_network(
                 config,name,policy_path,image_modality=image_modality,
                 require_commnet_weights=require_commnet_weights)
+            if (name == "commNet"
+                    and is_event_cloud_modality(image_modality)):
+                if getattr(networks[name],"visual_backbone",None) != "secnet":
+                    raise ValueError(
+                        "event_cloud CommNet checkpoint is not a SECNet model; "
+                        "train a fresh modality-specific checkpoint.")
+                feature_network = networks[name].networks["feat"]
+                if feature_network.num_points != resolved_cloud_options["num_points"]:
+                    raise ValueError(
+                        "Existing SECNet CommNet point count does not match "
+                        "event_cloud_options; train a fresh matching checkpoint.")
+            elif (name == "commNet"
+                  and getattr(networks[name],"visual_backbone",None) == "secnet"):
+                raise ValueError(
+                    "SECNet CommNet checkpoints cannot be used with dense images "
+                    "or voxel grids.")
             network_paths[name] = nf.get_network_path(
                 policy_path,name,image_modality)
 

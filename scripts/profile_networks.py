@@ -34,7 +34,7 @@ from sousvide.control.network_factory import (  # noqa: E402
     generate_network,
     get_network_load_path,
 )
-from sousvide.synthesize.image_modality import IMAGE_MODALITIES  # noqa: E402
+from sousvide.synthesize.image_modality import VISUAL_MODALITIES  # noqa: E402
 
 
 NETWORK_NAMES = ("histNet", "commNet")
@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--image-modality",
-        choices=IMAGE_MODALITIES,
+        choices=VISUAL_MODALITIES,
         default="kronecker_delta",
         help="CommNet checkpoint modality (default: kronecker_delta).",
     )
@@ -145,7 +145,13 @@ def parse_args() -> argparse.Namespace:
         help="Optional path for a machine-readable summary.",
     )
     parser.add_argument("--seed", type=int, default=0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.image_modality == "event_cloud" and (
+            args.precision != "float32" or args.compile != "none"):
+        parser.error(
+            "event_cloud SECNet profiling currently requires "
+            "--precision float32 --compile none")
+    return args
 
 
 def positive_int(value: str) -> int:

@@ -13,15 +13,15 @@ from sousvide.control.networks.feature_extractors import (
 )
 from sousvide.control.networks.pave import Pave
 from sousvide.synthesize.image_modality import (
-    IMAGE_MODALITIES,ImageModality,image_modality_channels,
-    is_voxel_grid_modality,validate_image_modality)
+    IMAGE_MODALITIES,VisualModality,
+    is_event_cloud_modality,is_voxel_grid_modality,validate_visual_modality)
 
 
 def get_network_path(
         pilot_path:str,net_name:str,
-        image_modality:ImageModality="rgb") -> str:
+        image_modality:VisualModality="rgb") -> str:
     """Return the canonical save path for a policy network."""
-    image_modality = validate_image_modality(image_modality)
+    image_modality = validate_visual_modality(image_modality)
     filename = (
         f"{net_name}_{image_modality}.pt"
         if net_name == "commNet"
@@ -32,13 +32,13 @@ def get_network_path(
 
 def get_network_load_path(
         pilot_path:str,net_name:str,
-        image_modality:ImageModality="rgb") -> str:
+        image_modality:VisualModality="rgb") -> str:
     """Resolve a network path, including a modality-matched legacy commNet."""
     network_path = get_network_path(pilot_path,net_name,image_modality)
     if os.path.isfile(network_path):
         return network_path
 
-    if net_name == "commNet":
+    if net_name == "commNet" and not is_event_cloud_modality(image_modality):
         legacy_path = os.path.join(pilot_path,"commNet.pt")
         if (os.path.isfile(legacy_path) and
             _get_legacy_commnet_modality(pilot_path) == image_modality):
@@ -47,7 +47,7 @@ def get_network_load_path(
     return network_path
 
 
-def _get_legacy_commnet_modality(pilot_path:str) -> ImageModality:
+def _get_legacy_commnet_modality(pilot_path:str) -> VisualModality:
     """Infer which modality produced ``commNet.pt`` from its latest loss log."""
     losses_path = os.path.join(pilot_path,"losses_commNet.pt")
     if os.path.isfile(losses_path):
@@ -67,7 +67,7 @@ def generate_network(
         net_config:Dict[str,Union[str,Dict[str,List[List[Union[str,int]]]]]],
         net_name:str,
         pilot_path:str,
-        image_modality:ImageModality="rgb",
+        image_modality:VisualModality="rgb",
         require_commnet_weights:bool=False) -> BaseNet:
     """
     Generate a network based on the configuration dictionary. If the network does
@@ -88,10 +88,13 @@ def generate_network(
 
     # Some useful intermediate variables
     network_type = net_config["network_type"]
-    if network_type == "dino" and is_voxel_grid_modality(image_modality):
+    image_modality = validate_visual_modality(image_modality)
+    if network_type == "dino" and (
+            is_voxel_grid_modality(image_modality)
+            or is_event_cloud_modality(image_modality)):
         raise ValueError(
-            "Voxel-grid image modalities are supported only by SVNet; "
-            "DINO image inputs require three channels.")
+            "Voxel-grid and event-cloud modalities are supported only by "
+            "SVNet; DINO image inputs require three channels.")
     network_path = get_network_path(pilot_path,net_name,image_modality)
     load_path = get_network_load_path(pilot_path,net_name,image_modality)
     print(f"Generating network '{net_name}' of type '{network_type}' at path '{network_path}'...")
@@ -119,7 +122,7 @@ def generate_network(
         elif network_type == "svnet":
             network = SVNet(
                 **net_config,
-                image_channels=image_modality_channels(image_modality))
+                image_modality=image_modality)
         elif network_type == "dnnet":
             network = DNNet(**net_config)
         elif network_type == "pave":

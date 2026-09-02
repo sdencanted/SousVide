@@ -6,7 +6,8 @@ from unittest import mock
 import numpy as np
 import torch
 
-from sousvide.flight.deploy_figs import _DebugPolicyController
+from sousvide.flight.deploy_figs import (
+    _DebugPolicyController,_event_cloud_debug_image)
 from sousvide.synthesize.event_generator import (
     OnlineEventImageGenerator,V2ERolloutRecorder)
 from sousvide.synthesize.event_simulator import EventSimulator
@@ -24,6 +25,20 @@ class RecordingPolicy:
 
 
 class OnlineEventDeploymentTests(unittest.TestCase):
+    def test_event_cloud_debug_canvas_preserves_sensor_aspect_ratio(self):
+        cloud = np.array([
+            [0.0,0.0,0.0,1.0],
+            [1.0,0.999,0.999,-1.0],
+        ],dtype=np.float32)
+
+        landscape = _event_cloud_debug_image(cloud,(360,640))
+        portrait = _event_cloud_debug_image(cloud,(640,360))
+
+        self.assertEqual(landscape.shape,(126,224))
+        self.assertEqual(portrait.shape,(224,126))
+        self.assertEqual(landscape[0,0],1.0)
+        self.assertEqual(landscape[-1,-1],-1.0)
+
     def test_online_generator_selects_each_python_surface(self):
         class FakeEmulator:
             def __init__(self,**kwargs):
@@ -71,9 +86,11 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 self.updates.append(args)
 
         image = np.full((2,3,3),37,dtype=np.uint8)
+        source_rgb = np.full((2,3,3),91,dtype=np.uint8)
         view = DebugView()
         controller = _DebugPolicyController(
             Controller(),"Maverick","kronecker_delta",view)
+        controller.set_debug_rgb(source_rgb)
 
         command,timing = controller.control(
             1.25,np.zeros(10),np.zeros(4),image,
@@ -83,11 +100,43 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         np.testing.assert_array_equal(command,[-2.0,0.1,-0.2,0.3])
         self.assertEqual(timing,{"solve":0.004})
         self.assertEqual(len(view.updates),1)
-        pilot,modality,timestamp,debug_image,debug_command = view.updates[0]
+        (pilot,modality,timestamp,debug_image,debug_command,
+         debug_source_rgb) = view.updates[0]
         self.assertEqual((pilot,modality,timestamp),
                          ("Maverick","kronecker_delta",1.25))
         self.assertIs(debug_image,image)
         self.assertIs(debug_command,command)
+        np.testing.assert_array_equal(debug_source_rgb,source_rgb)
+
+    def test_event_simulator_forwards_source_rgb_to_debug_controller(self):
+        class DebugRecordingPolicy(RecordingPolicy):
+            def __init__(self):
+                super().__init__()
+                self.source_images = []
+
+            def set_debug_rgb(self,rgb):
+                self.source_images.append(rgb.copy())
+
+        simulator = self._simulator()
+        expert = RecordingPolicy()
+        student = DebugRecordingPolicy()
+
+        def event_callback(rgb,timestamp,close_window):
+            if close_window:
+                return np.full(rgb.shape[:2],37,dtype=np.uint8)
+            return None
+
+        patches = self._patch_dynamics()
+        with patches[0],patches[1],patches[2],patches[3]:
+            simulator.simulate_with_events(
+                student,1.0,1.1,np.zeros(10),event_callback,5,
+                warmup_policy=expert,image_modality="kronecker_delta")
+
+        self.assertEqual(len(student.source_images),2)
+        self.assertTrue(all(
+            image.shape == (2,3,3) for image in student.source_images))
+        self.assertTrue(all(
+            np.all(image == 11) for image in student.source_images))
 
     def _simulator(self):
         simulator = EventSimulator.__new__(EventSimulator)

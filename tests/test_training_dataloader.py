@@ -517,6 +517,7 @@ class TrainingDataLoaderTests(unittest.TestCase):
             )
             deployed_states = []
             metrics = [9.0,2.0,5.0]
+            progress = mock.Mock()
 
             def deploy(*args,**kwargs):
                 deployed_states.append(copy.deepcopy(network.state_dict()))
@@ -538,7 +539,8 @@ class TrainingDataLoaderTests(unittest.TestCase):
                     "cohort","student","commNet",epochs,
                     deployment=("course","scene","method"),
                     lim_sv=1,batch_size=batch_size,
-                    numerical_mode="original")
+                    numerical_mode="original",
+                    progress_bar=(progress,17))
 
             self.assertEqual(deploy_mock.call_count,3)
             for call in deploy_mock.call_args_list:
@@ -560,6 +562,10 @@ class TrainingDataLoaderTests(unittest.TestCase):
                 self.assertTrue(torch.equal(value,deployed_states[1][name]))
             self.assertFalse(os.path.exists(
                 os.path.join(temp_dir,"ckpts","commNet_rgb")))
+            self.assertEqual(
+                [call.kwargs["tte"] for call in progress.update.call_args_list
+                 if "tte" in call.kwargs],
+                ["9.00","2.00","5.00"])
 
     def test_nested_batch_moves_without_changing_container_structure(self):
         batch = {

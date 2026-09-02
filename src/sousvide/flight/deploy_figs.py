@@ -17,19 +17,48 @@ from figs.simulator import Simulator
 from figs.control.vehicle_rate_mpc import VehicleRateMPC
 from figs.dynamics.external_forces import ExternalForces
 from sousvide.control.pilot import Pilot
-from sousvide.synthesize.event_generator import OnlineEventImageGenerator
+from sousvide.synthesize.event_generator import (
+    OnlineEventCloudGenerator,OnlineEventImageGenerator)
 from sousvide.synthesize.event_simulator import EventSimulator
 from sousvide.synthesize.image_modality import (
-    ImageModality,image_modality_channels,is_event_modality,
-    is_grayscale_modality,is_voxel_grid_modality,rgb_to_grayscale,
-    validate_image_modality)
+    VisualModality,image_modality_channels,is_event_cloud_modality,
+    is_event_modality,is_grayscale_modality,is_voxel_grid_modality,
+    rgb_to_grayscale,validate_visual_modality)
 from sousvide.synthesize.event_surfaces import resolve_event_surface_options
+from sousvide.synthesize.event_cloud import resolve_event_cloud_options
+
+
+def _event_cloud_debug_image(
+        event_cloud:np.ndarray,sensor_shape:tuple[int,int],
+        max_side:int=224) -> np.ndarray:
+    """Rasterize a normalized cloud without changing the sensor aspect ratio."""
+    event_cloud = np.asarray(event_cloud)
+    if event_cloud.ndim != 2 or event_cloud.shape[1] != 4:
+        raise ValueError(
+            f"Expected an event cloud with shape (N,4), got {event_cloud.shape}.")
+    sensor_height,sensor_width = sensor_shape
+    if sensor_height <= 0 or sensor_width <= 0 or max_side <= 0:
+        raise ValueError("Event-cloud debug dimensions must be positive.")
+    scale = max_side/max(sensor_height,sensor_width)
+    display_height = max(1,int(round(sensor_height*scale)))
+    display_width = max(1,int(round(sensor_width*scale)))
+    display_image = np.zeros(
+        (display_height,display_width),dtype=np.float32)
+    xs = np.clip(
+        (event_cloud[:,1]*display_width).astype(np.int64),
+        0,display_width-1)
+    ys = np.clip(
+        (event_cloud[:,2]*display_height).astype(np.int64),
+        0,display_height-1)
+    np.add.at(display_image,(ys,xs),event_cloud[:,3])
+    return display_image
 
 
 class _NotebookPolicyDebugView:
     """Live notebook view of the exact policy image and control command."""
 
-    def __init__(self):
+    def __init__(self,event_sensor_shape:tuple[int,int]=(224,224),
+                 show_event_rgb:bool=False):
         from IPython import get_ipython
         from IPython.display import display
         import matplotlib.pyplot as plt
@@ -43,28 +72,39 @@ class _NotebookPolicyDebugView:
         self._handle = None
         self._figure = None
         self._image_axis = None
+        self._rgb_axis = None
         self._thrust_axis = None
         self._rate_axis = None
         self._image_artist = None
+        self._rgb_artist = None
         self._thrust_bar = None
         self._thrust_label = None
         self._bars = None
         self._rate_labels = None
+        self._event_sensor_shape = event_sensor_shape
+        self._show_event_rgb = show_event_rgb
 
-    def update(self,pilot_name:str,image_modality:ImageModality,
-               timestamp:float,image:np.ndarray,command:np.ndarray) -> None:
+    def update(self,pilot_name:str,image_modality:VisualModality,
+               timestamp:float,image:np.ndarray,command:np.ndarray,
+               source_rgb:np.ndarray|None=None) -> None:
         image = np.asarray(image)
         command = np.asarray(command).reshape(-1)
         if command.shape != (4,):
             raise ValueError(
                 f"Expected [collective, wx, wy, wz], got command shape {command.shape}.")
-        expected_channels = image_modality_channels(image_modality)
-        if image.ndim != 3 or image.shape[-1] != expected_channels:
-            raise ValueError(
-                "Expected the policy image to have shape "
-                f"(H, W, {expected_channels}), got {image.shape}.")
+        if is_event_cloud_modality(image_modality):
+            display_image = _event_cloud_debug_image(
+                image,self._event_sensor_shape)
+        else:
+            expected_channels = image_modality_channels(image_modality)
+            if image.ndim != 3 or image.shape[-1] != expected_channels:
+                raise ValueError(
+                    "Expected the policy image to have shape "
+                    f"(H, W, {expected_channels}), got {image.shape}.")
 
-        if image_modality == "event_voxel_grid":
+        if is_event_cloud_modality(image_modality):
+            pass
+        elif image_modality == "event_voxel_grid":
             display_image = image.sum(axis=-1)
         elif image_modality == "event_voxel_grid_polarity":
             display_image = (
@@ -79,12 +119,32 @@ class _NotebookPolicyDebugView:
         voxel_limit = max(1e-6,float(np.max(np.abs(display_image))))
         thrust = command[0]
         rates = command[1:4]
+        if self._show_event_rgb:
+            if source_rgb is None:
+                source_rgb = np.zeros(
+                    (*self._event_sensor_shape,3),dtype=np.uint8)
+            source_rgb = np.asarray(source_rgb)
+            if source_rgb.ndim != 3 or source_rgb.shape[-1] != 3:
+                raise ValueError(
+                    "Event debug RGB source must have shape (H,W,3).")
 
         if self._figure is None:
-            (self._figure,
-             (self._image_axis,self._thrust_axis,self._rate_axis)) = self._plt.subplots(
-                1,3,figsize=(13,4),gridspec_kw={"width_ratios":[2,0.65,1]})
-            if is_voxel_grid_modality(image_modality):
+            if self._show_event_rgb:
+                self._figure = self._plt.figure(figsize=(13,7))
+                grid = self._figure.add_gridspec(
+                    2,3,width_ratios=[2,0.65,1])
+                self._image_axis = self._figure.add_subplot(grid[0,0])
+                self._rgb_axis = self._figure.add_subplot(grid[1,0])
+                self._thrust_axis = self._figure.add_subplot(grid[:,1])
+                self._rate_axis = self._figure.add_subplot(grid[:,2])
+            else:
+                (self._figure,
+                 (self._image_axis,self._thrust_axis,self._rate_axis)) = (
+                    self._plt.subplots(
+                        1,3,figsize=(13,4),
+                        gridspec_kw={"width_ratios":[2,0.65,1]}))
+            if (is_voxel_grid_modality(image_modality)
+                    or is_event_cloud_modality(image_modality)):
                 self._image_artist = self._image_axis.imshow(
                     display_image,cmap="coolwarm",
                     vmin=-voxel_limit,vmax=voxel_limit)
@@ -95,6 +155,10 @@ class _NotebookPolicyDebugView:
             else:
                 self._image_artist = self._image_axis.imshow(display_image)
             self._image_axis.axis("off")
+            if self._show_event_rgb:
+                self._rgb_artist = self._rgb_axis.imshow(source_rgb)
+                self._rgb_axis.set_title("RGB source frame")
+                self._rgb_axis.axis("off")
 
             self._thrust_bar = self._thrust_axis.bar(
                 [r"$f_{th}$"],[thrust],color="tab:blue")[0]
@@ -116,7 +180,10 @@ class _NotebookPolicyDebugView:
             self._figure.tight_layout()
 
         self._image_artist.set_data(display_image)
-        if is_voxel_grid_modality(image_modality):
+        if self._rgb_artist is not None:
+            self._rgb_artist.set_data(source_rgb)
+        if (is_voxel_grid_modality(image_modality)
+                or is_event_cloud_modality(image_modality)):
             self._image_artist.set_cmap("coolwarm")
             self._image_artist.set_clim(-voxel_limit,voxel_limit)
         elif (is_event_modality(image_modality)
@@ -153,14 +220,19 @@ class _NotebookPolicyDebugView:
 class _DebugPolicyController:
     """Controller proxy that reports the exact input/output of each command."""
 
-    def __init__(self,controller,pilot_name:str,image_modality:ImageModality,debug_view):
+    def __init__(self,controller,pilot_name:str,image_modality:VisualModality,debug_view):
         self._controller = controller
         self._pilot_name = pilot_name
         self._image_modality = image_modality
         self._debug_view = debug_view
+        self._source_rgb = None
 
     def __getattr__(self,name):
         return getattr(self._controller,name)
+
+    def set_debug_rgb(self,rgb:np.ndarray) -> None:
+        """Receive the rendered RGB frame paired with an event policy input."""
+        self._source_rgb = np.asarray(rgb).copy()
 
     def control(self,t_cr,x_cr,u_pr,rgb_cr,dpt_cr,fts_cr):
         command,timing = self._controller.control(
@@ -169,8 +241,12 @@ class _DebugPolicyController:
             rgb_to_grayscale(rgb_cr)
             if is_grayscale_modality(self._image_modality)
             else rgb_cr)
+        source_rgb = (
+            self._source_rgb
+            if is_event_modality(self._image_modality) else rgb_cr)
         self._debug_view.update(
-            self._pilot_name,self._image_modality,t_cr,debug_image,command)
+            self._pilot_name,self._image_modality,t_cr,debug_image,command,
+            source_rgb)
         return command,timing
 
 def deploy_roster(cohort_name:str,
@@ -180,9 +256,10 @@ def deploy_roster(cohort_name:str,
                   bframe_name:str="carl",
                   mode:Literal["evaluate","visualize","generate","debug"]="evaluate",
                   show_table:bool=False,
-                  image_modality:ImageModality="rgb",
+                  image_modality:VisualModality="rgb",
                   event_device:Literal["auto","cpu","cuda"]="auto",
                   event_surface_options:dict[str,dict]|None=None,
+                  event_cloud_options:dict|None=None,
                   debug:bool=False,
                   require_commnet_weights:bool=True) -> Union[None,dict]:
     """"
@@ -205,6 +282,7 @@ def deploy_roster(cohort_name:str,
         image_modality: Visual input used by student pilots.
         event_device:   Device used for synchronous online v2e processing.
         event_surface_options: Per-modality event-surface parameter overrides.
+        event_cloud_options: SECNet cloud point-count and sampling-seed overrides.
         debug:          Show each policy image, thrust, and body-rate output live in a notebook.
         require_commnet_weights: Reject student deployment when selected CommNet weights are missing.
 
@@ -212,11 +290,21 @@ def deploy_roster(cohort_name:str,
         None:           The function saves the simulation data and video to disk.
     """
 
-    image_modality = validate_image_modality(image_modality)
+    image_modality = validate_visual_modality(image_modality)
     resolved_surface_options = (
         resolve_event_surface_options(
             (image_modality,),event_surface_options)
-        if is_event_modality(image_modality) else {})
+        if (is_event_modality(image_modality)
+            and not is_event_cloud_modality(image_modality)) else {})
+    resolved_cloud_options = (
+        resolve_event_cloud_options(event_cloud_options)
+        if is_event_cloud_modality(image_modality) else None)
+    if not is_event_cloud_modality(image_modality) and event_cloud_options:
+        raise ValueError(
+            "event_cloud_options requires image_modality='event_cloud'.")
+    if is_event_cloud_modality(image_modality) and event_surface_options:
+        raise ValueError(
+            "event_surface_options cannot be used with image_modality='event_cloud'.")
     if event_device not in ("auto","cpu","cuda"):
         raise ValueError("event_device must be 'auto', 'cpu', or 'cuda'.")
     if event_device == "cuda" and not torch.cuda.is_available():
@@ -283,7 +371,15 @@ def deploy_roster(cohort_name:str,
         if is_event_modality(image_modality)
         else None
     )
-    debug_view = _NotebookPolicyDebugView() if debug or mode == "debug" else None
+    camera_config = bframe.get("camera",{})
+    event_sensor_shape = (
+        int(camera_config.get("height",224)),
+        int(camera_config.get("width",224)))
+    debug_view = (
+        _NotebookPolicyDebugView(
+            event_sensor_shape,
+            show_event_rgb=is_event_modality(image_modality))
+        if debug or mode == "debug" else None)
 
     Metrics = {}
     for pilot in crew:
@@ -293,11 +389,12 @@ def deploy_roster(cohort_name:str,
         else:
             controller = Pilot(
                 cohort_name,pilot,image_modality=image_modality,
+                event_cloud_options=resolved_cloud_options,
                 require_commnet_weights=require_commnet_weights)
             controller.set_mode('deploy')
         base_controller = controller
         controller_modality = "rgb" if pilot == "expert" else image_modality
-        if debug_view is not None:
+        if debug_view is not None and pilot != "expert":
             controller = _DebugPolicyController(
                 base_controller,pilot,controller_modality,debug_view)
 
@@ -324,10 +421,16 @@ def deploy_roster(cohort_name:str,
                 callback = None
                 if pilot != "expert":
                     expected_windows = int(round(dt_ro*controller.hz))
-                    online_events = OnlineEventImageGenerator(
-                        expected_windows,device=resolved_event_device,
-                        image_modality=image_modality,
-                        event_surface_options=resolved_surface_options)
+                    online_events = (
+                        OnlineEventCloudGenerator(
+                            expected_windows,device=resolved_event_device,
+                            event_cloud_options=resolved_cloud_options,
+                            stream_id=f"{pilot}:{idx}")
+                        if is_event_cloud_modality(image_modality)
+                        else OnlineEventImageGenerator(
+                            expected_windows,device=resolved_event_device,
+                            image_modality=image_modality,
+                            event_surface_options=resolved_surface_options))
                     callback = online_events.process_frame
 
                 try:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import numpy as np
 
@@ -15,12 +15,14 @@ ImageModality = Literal[
     "event_bilinear", "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 ]
+VisualModality: TypeAlias = ImageModality | Literal["event_cloud"]
 
 IMAGE_MODALITIES: tuple[ImageModality, ...] = (
     "rgb", "grayscale", "kronecker_delta", "event_pseudo_gaussian",
     "event_bilinear", "event_bin", "event_eros", "event_tos",
     "event_voxel_grid", "event_voxel_grid_polarity",
 )
+VISUAL_MODALITIES: tuple[VisualModality, ...] = (*IMAGE_MODALITIES, "event_cloud")
 EVENT_IMAGE_MODALITIES = IMAGE_MODALITIES[2:]
 VOXEL_GRID_MODALITIES: tuple[ImageModality, ...] = (
     "event_voxel_grid", "event_voxel_grid_polarity",
@@ -41,6 +43,7 @@ _MODALITY_STORAGE = {
     "event_voxel_grid": ("event_voxel_grid", "event_voxel_grid"),
     "event_voxel_grid_polarity": (
         "event_voxel_grid_polarity", "event_voxel_grid_polarity"),
+    "event_cloud": ("event_cloud", "event_cloud"),
 }
 
 
@@ -104,16 +107,20 @@ def event_image_to_model_channels(
 
 
 def is_event_modality(image_modality: str) -> bool:
-    return image_modality in EVENT_IMAGE_MODALITIES
+    return image_modality in EVENT_IMAGE_MODALITIES or image_modality == "event_cloud"
+
+
+def is_event_cloud_modality(image_modality: str) -> bool:
+    return image_modality == "event_cloud"
 
 
 def is_grayscale_modality(image_modality: str) -> bool:
     return image_modality == "grayscale"
 
 
-def uses_modality_observation_folder(image_modality: ImageModality) -> bool:
+def uses_modality_observation_folder(image_modality: VisualModality) -> bool:
     """Return whether observations must be isolated from legacy RGB data."""
-    return validate_image_modality(image_modality) != "rgb"
+    return validate_visual_modality(image_modality) != "rgb"
 
 
 def is_voxel_grid_modality(image_modality: str) -> bool:
@@ -130,8 +137,8 @@ def image_modality_channels(image_modality: ImageModality) -> int:
     return 3
 
 
-def modality_storage(image_modality: ImageModality) -> tuple[str, str]:
-    image_modality = validate_image_modality(image_modality)
+def modality_storage(image_modality: VisualModality) -> tuple[str, str]:
+    image_modality = validate_visual_modality(image_modality)
     return _MODALITY_STORAGE[image_modality]
 
 
@@ -143,9 +150,16 @@ def validate_image_modality(image_modality: str) -> ImageModality:
     return image_modality
 
 
-def get_aligned_stack_files(course_path: str, image_modality: ImageModality):
+def validate_visual_modality(image_modality: str) -> VisualModality:
+    if image_modality not in VISUAL_MODALITIES:
+        raise ValueError(
+            f"image_modality must be one of {VISUAL_MODALITIES}.")
+    return image_modality
+
+
+def get_aligned_stack_files(course_path: str, image_modality: VisualModality):
     """Return trajectory/modality stack paths keyed by their numeric suffix."""
-    image_modality = validate_image_modality(image_modality)
+    image_modality = validate_visual_modality(image_modality)
     modality_folder,modality_prefix = modality_storage(image_modality)
 
     def indexed(folder: str, prefix: str) -> dict[str, str]:
@@ -169,9 +183,9 @@ def get_aligned_stack_files(course_path: str, image_modality: ImageModality):
 
 
 def prepare_rollout_images(traj_data: dict, image_data: dict,
-                           image_modality: ImageModality) -> np.ndarray:
+                           image_modality: VisualModality) -> np.ndarray:
     """Validate one aligned rollout and return model-ready HWC images."""
-    image_modality = validate_image_modality(image_modality)
+    image_modality = validate_visual_modality(image_modality)
     if traj_data["rollout_id"] != image_data["rollout_id"]:
         raise ValueError("Trajectory and image rollout IDs do not match.")
 
@@ -186,7 +200,12 @@ def prepare_rollout_images(traj_data: dict, image_data: dict,
             f"Frame count mismatch for rollout {traj_data['rollout_id']}."
         )
 
-    if is_grayscale_modality(image_modality):
+    if is_event_cloud_modality(image_modality):
+        if (images.ndim != 3 or images.shape[2] != 4
+                or images.dtype != np.float32):
+            raise ValueError(
+                "event_cloud samples must have float32 (N,P,4) format.")
+    elif is_grayscale_modality(image_modality):
         if images.ndim != 4 or images.shape[-1] != 3:
             raise ValueError("RGB source frames must have shape (N,H,W,3).")
         images = rgb_to_grayscale(images)
