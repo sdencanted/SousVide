@@ -118,7 +118,6 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 self.source_images.append(rgb.copy())
 
         simulator = self._simulator()
-        expert = RecordingPolicy()
         student = DebugRecordingPolicy()
 
         def event_callback(rgb,timestamp,close_window):
@@ -130,7 +129,7 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         with patches[0],patches[1],patches[2],patches[3]:
             simulator.simulate_with_events(
                 student,1.0,1.1,np.zeros(10),event_callback,5,
-                warmup_policy=expert,image_modality="kronecker_delta")
+                image_modality="kronecker_delta")
 
         self.assertEqual(len(student.source_images),2)
         self.assertTrue(all(
@@ -150,7 +149,11 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         }
 
         class Solver:
+            def __init__(self):
+                self.calls = 0
+
             def simulate(self,x,u,p):
+                self.calls += 1
                 result = x.copy()
                 result[0] += 1
                 return result
@@ -173,7 +176,7 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         simulator.gsplat = GSplat()
         return simulator
 
-    def _patch_dynamics(self):
+    def _patch_dynamics(self,transform_side_effect=None,force_states=None):
         specification = {
             "nx":10,"nu":4,"m":1.0,"kt":1.0,"g":9.81,"Nrtr":4,
             "Tc2b":np.eye(4),"rgb_dim":(2,3,3),"dpt_dim":(2,3,1),
@@ -185,7 +188,18 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 pass
 
             def get_forces(self,state,noisy=True):
+                if force_states is not None:
+                    force_states.append(state.copy())
                 return np.zeros(3)
+
+        transform_patch = (
+            mock.patch(
+                "sousvide.synthesize.event_simulator.th.x_to_T",
+                side_effect=transform_side_effect)
+            if transform_side_effect is not None else
+            mock.patch(
+                "sousvide.synthesize.event_simulator.th.x_to_T",
+                return_value=np.eye(4)))
 
         return (
             mock.patch(
@@ -193,17 +207,14 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 return_value=specification),
             mock.patch(
                 "sousvide.synthesize.event_simulator.ExternalForces",Forces),
-            mock.patch(
-                "sousvide.synthesize.event_simulator.th.x_to_T",
-                return_value=np.eye(4)),
+            transform_patch,
             mock.patch(
                 "sousvide.synthesize.event_simulator.oh.obedient_quaternion",
                 side_effect=lambda current,previous:current),
         )
 
-    def test_expert_controls_warmup_and_student_receives_boundary_images(self):
+    def test_preroll_does_not_control_or_advance_the_recorded_state(self):
         simulator = self._simulator()
-        expert = RecordingPolicy()
         student = RecordingPolicy()
         callbacks = []
 
@@ -217,14 +228,12 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         with patches[0],patches[1],patches[2],patches[3]:
             result = simulator.simulate_with_events(
                 student,1.0,1.1,np.zeros(10),event_callback,5,
-                warmup_policy=expert,image_modality="kronecker_delta")
+                image_modality="kronecker_delta")
 
         _,xro,uro,_,rgb,_,_ = result
-        self.assertEqual(xro[0,0],5)
+        self.assertEqual(xro[0,0],0)
         self.assertEqual(len(uro),2)
         self.assertEqual(len(rgb),2)
-        self.assertEqual(len(expert.images),1)
-        self.assertTrue(np.all(expert.images[0] == 11))
         self.assertEqual(len(student.images),2)
         self.assertTrue(all(image.shape == (2,3,3) for image in student.images))
         self.assertTrue(all(np.all(image == 37) for image in student.images))
@@ -232,12 +241,52 @@ class OnlineEventDeploymentTests(unittest.TestCase):
             [timestamp for timestamp,close in callbacks if close],
             [0.05,0.1])
 
+    def test_preroll_ascends_at_half_a_meter_per_second_into_x0(self):
+        simulator = self._simulator()
+        policy = RecordingPolicy()
+        rendered_states = []
+        force_states = []
+        callbacks = []
+        x0 = np.array([
+            1.0,2.0,-1.0,0.1,0.2,0.3,0.0,0.0,0.0,1.0])
+
+        def record_transform(state):
+            rendered_states.append(state.copy())
+            return np.eye(4)
+
+        patches = self._patch_dynamics(record_transform,force_states)
+        with (
+            patches[0],patches[1],patches[2],patches[3],
+            mock.patch(
+                "sousvide.synthesize.event_simulator.np.random.normal",
+                side_effect=lambda loc,scale:np.zeros_like(loc)) as noise,
+        ):
+            simulator.simulate_with_events(
+                policy,1.0,1.1,x0,
+                lambda rgb,timestamp,close:callbacks.append(
+                    (timestamp,close)),
+                pre_roll_steps=5,image_modality="rgb")
+
+        expected = np.repeat(x0[None,:],5,axis=0)
+        expected[:,2] += np.array([0.025,0.020,0.015,0.010,0.005])
+        np.testing.assert_allclose(rendered_states[:5],expected)
+        np.testing.assert_array_equal(rendered_states[5],x0)
+        np.testing.assert_array_equal(x0,np.array([
+            1.0,2.0,-1.0,0.1,0.2,0.3,0.0,0.0,0.0,1.0]))
+        self.assertEqual([item[0] for item in callbacks[:6]],
+                         [0.0,0.01,0.02,0.03,0.04,0.05])
+        self.assertEqual([item[1] for item in callbacks[:6]],
+                         [False,False,False,False,False,True])
+        self.assertEqual(len(policy.images),2)
+        self.assertEqual(len(force_states),10)
+        self.assertEqual(noise.call_count,12)
+        self.assertEqual(simulator.solver.calls,10)
+
     def test_student_receives_voxel_grids_in_hwc_layout(self):
         for modality,channels in (
                 ("event_voxel_grid",5),
                 ("event_voxel_grid_polarity",10)):
             simulator = self._simulator()
-            expert = RecordingPolicy()
             student = RecordingPolicy()
 
             def event_callback(rgb,timestamp,close_window):
@@ -249,7 +298,7 @@ class OnlineEventDeploymentTests(unittest.TestCase):
             with patches[0],patches[1],patches[2],patches[3]:
                 simulator.simulate_with_events(
                     student,1.0,1.1,np.zeros(10),event_callback,5,
-                    warmup_policy=expert,image_modality=modality)
+                    image_modality=modality)
 
             self.assertEqual(len(student.images),2)
             self.assertTrue(all(
@@ -263,12 +312,10 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         patches = self._patch_dynamics()
         with patches[0],patches[1],patches[2],patches[3]:
             simulator.simulate_with_events(
-                expert,1.0,1.1,np.zeros(10),None,5,
-                warmup_policy=expert,image_modality="rgb")
+                expert,1.0,1.1,np.zeros(10),None,5,image_modality="rgb")
 
-        # One hidden control render plus two saved control renders.
-        self.assertEqual(simulator.gsplat.render_count,3)
-        self.assertEqual(len(expert.images),3)
+        self.assertEqual(simulator.gsplat.render_count,2)
+        self.assertEqual(len(expert.images),2)
 
     def test_real_v2e_cpu_generates_in_memory_without_files(self):
         with tempfile.TemporaryDirectory() as folder:

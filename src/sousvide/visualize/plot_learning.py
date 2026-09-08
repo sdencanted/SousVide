@@ -6,6 +6,7 @@ import torch
 import sousvide.visualize.plot_3D as p3
 import sousvide.visualize.rich_utilities as ru
 import sousvide.flight.flight_helper as fh
+from sousvide.control.artifact_paths import get_losses_path
 from sousvide.synthesize.image_modality import validate_visual_modality
 
 from typing import List
@@ -39,7 +40,14 @@ def plot_losses(cohort_name:str, roster:List[str], network_name:str,
     for student in roster:
         # Load the losses for each student
         student_path = os.path.join(cohort_path, "roster", student)
-        losses_path = os.path.join(student_path, f"losses_{network_name}.pt")
+        losses_path = get_losses_path(
+            student_path,network_name,image_modality or "rgb")
+        legacy_losses_path = os.path.join(
+            student_path,f"losses_{network_name}.pt")
+        if (not os.path.exists(losses_path)
+                and network_name == "commNet"):
+            # Older CommNet versions stored every modality in one log file.
+            losses_path = legacy_losses_path
         if os.path.exists(losses_path):
             losses: dict = torch.load(losses_path,weights_only=False)
         else:

@@ -18,15 +18,17 @@ from sousvide.synthesize.image_modality import (
 
 
 class EventSimulator(Simulator):
-    """A Simulator with a hidden event warm-up and frame callback.
+    """A Simulator with a hidden event pre-roll and frame callback.
 
     The base FiGS simulator is intentionally left untouched. This subclass is
     selected for event-enabled rollout generation and online deployment.
     """
 
+    PRE_ROLL_ASCENT_SPEED_MPS = 0.5
+
     def simulate_with_events(
-        self,policy,t0,tf,x0,event_frame_callback,warmup_steps,
-        warmup_policy=None,image_modality:VisualModality="rgb",
+        self,policy,t0,tf,x0,event_frame_callback,pre_roll_steps,
+        image_modality:VisualModality="rgb",
     ):
         nw = 6
         rollout = self.conFiG["rollout"]
@@ -57,15 +59,12 @@ class EventSimulator(Simulator):
             std_sn = np.array(sensor_noise["std"])
 
         image_modality = validate_visual_modality(image_modality)
-        warmup_policy = warmup_policy or policy
         n_sim2ctl = int(hz_sim / policy.hz)
         if n_sim2ctl * policy.hz != hz_sim:
             raise ValueError("Simulation frequency must be divisible by controller frequency.")
-        if warmup_policy.hz != policy.hz:
-            raise ValueError("Warm-up and evaluated policies must use the same frequency.")
-        if warmup_steps != n_sim2ctl:
+        if pre_roll_steps != n_sim2ctl:
             raise ValueError(
-                f"Event warm-up must cover one control interval ({n_sim2ctl} simulation steps)."
+                f"Event pre-roll must cover one control interval ({n_sim2ctl} simulation steps)."
             )
 
         mu_md = mu_md_s * (1 / n_sim2ctl)
@@ -86,30 +85,19 @@ class EventSimulator(Simulator):
         ucr = np.array([-(m * g) / (nrtr * kt), 0.0, 0.0, 0.0])
         tau_cr = np.zeros(3)
 
-        # The sampled perturbation is one control interval before t0. These
-        # frames/states are deliberately not written to rollout arrays.
-        t_warmup = t0 - warmup_steps / hz_sim
-        for i in range(warmup_steps):
-            tcr = t_warmup + i / hz_sim
-            fcr = fex.get_forces(xcr[0:6], noisy=True)
-            pcr = np.hstack((m, kt, fcr))
-            fts = np.hstack((fcr, tau_cr))
-            is_control_step = i % n_sim2ctl == 0
-            if event_frame_callback is not None or is_control_step:
-                tb2w = th.x_to_T(xcr)
-                rgb,dpt = self.gsplat.render_rgb(camera,tb2w @ tc2b)
-                if event_frame_callback is not None:
-                    event_frame_callback(rgb,i/hz_sim,False)
-
-            if is_control_step:
-                xsn = xcr + np.random.normal(loc=mu_sn, scale=std_sn)
-                xsn[6:10] = oh.obedient_quaternion(xsn[6:10], xpr[6:10])
-                ucr,_ = warmup_policy.control(tcr,xsn,ucr,rgb,dpt,fts)
-
-            xpr = xcr
-            xcr = self.solver.simulate(x=xcr, u=ucr, p=pcr)
-            xcr = xcr + np.random.normal(loc=mu_md, scale=std_md)
-            xcr[6:10] = oh.obedient_quaternion(xcr[6:10], xpr[6:10])
+        # Render a kinematic ascent into x0 to seed the first event window.
+        # FiGS uses positive world z downward, so a pose below x0 has a larger
+        # z coordinate. Nothing in the live simulation or controller is
+        # advanced during this pre-roll.
+        if event_frame_callback is not None:
+            for i in range(pre_roll_steps):
+                pre_roll_state = x0.copy()
+                time_to_start = (pre_roll_steps - i) / hz_sim
+                pre_roll_state[2] += (
+                    self.PRE_ROLL_ASCENT_SPEED_MPS * time_to_start)
+                tb2w = th.x_to_T(pre_roll_state)
+                rgb,_ = self.gsplat.render_rgb(camera,tb2w @ tc2b)
+                event_frame_callback(rgb,i/hz_sim,False)
 
         # The last event frame is the last saved RGB frame. The remaining four
         # integrations only produce the terminal trajectory state.
@@ -132,7 +120,7 @@ class EventSimulator(Simulator):
                         raise ValueError(
                             "Event-image deployment requires an event frame callback.")
                     event_image = event_frame_callback(
-                        rgb,(warmup_steps+i)/hz_sim,True)
+                        rgb,(pre_roll_steps+i)/hz_sim,True)
                     if event_image is None:
                         raise RuntimeError(
                             "Event callback did not return a control-boundary image.")
@@ -158,11 +146,11 @@ class EventSimulator(Simulator):
 
                 if (image_modality == "rgb" and
                     event_frame_callback is not None and i <= final_event_step):
-                    event_frame_callback(rgb, (warmup_steps + i) / hz_sim, True)
+                    event_frame_callback(rgb, (pre_roll_steps + i) / hz_sim, True)
             elif event_frame_callback is not None and i <= final_event_step:
                 tb2w = th.x_to_T(xcr)
                 rgb, _ = self.gsplat.render_rgb(camera, tb2w @ tc2b)
-                event_frame_callback(rgb, (warmup_steps + i) / hz_sim, False)
+                event_frame_callback(rgb, (pre_roll_steps + i) / hz_sim, False)
 
             xpr = xcr
             xcr = self.solver.simulate(x=xcr, u=ucr, p=pcr)

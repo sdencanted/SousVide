@@ -470,7 +470,8 @@ class TrainingDataLoaderTests(unittest.TestCase):
                             reference_rng,compatible_rng))
 
                         losses = torch.load(
-                            os.path.join(run_path,"losses_commNet.pt"),
+                            os.path.join(
+                                run_path,f"losses_commNet_{image_modality}.pt"),
                             weights_only=False)
                         entry = next(iter(losses.values()))
                         np.testing.assert_array_equal(
@@ -551,7 +552,7 @@ class TrainingDataLoaderTests(unittest.TestCase):
                 self.assertFalse(call.kwargs["require_commnet_weights"])
 
             losses = torch.load(
-                os.path.join(temp_dir,"losses_commNet.pt"),
+                os.path.join(temp_dir,"losses_commNet_rgb.pt"),
                 weights_only=False)
             entry = next(iter(losses.values()))
             np.testing.assert_array_equal(

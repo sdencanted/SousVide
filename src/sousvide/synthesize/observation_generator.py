@@ -18,6 +18,24 @@ from sousvide.instruct.synthesized_data import (
 from rich.progress import Progress
 from sousvide.control.pilot import Pilot
 
+
+def _require_commnet_prerequisites(
+        cohort_path:str,roster:list[str],networks:list[str]|None) -> None:
+    """Require trained HistNet weights when CommNet data is requested."""
+    if networks is not None and "commNet" not in networks:
+        return
+
+    for student in roster:
+        histnet_path = os.path.join(
+            cohort_path,"roster",student,"histNet.pt")
+        if not os.path.isfile(histnet_path):
+            raise FileNotFoundError(
+                "Cannot generate CommNet observations for "
+                f"'{student}': trained HistNet weights were not found at "
+                f"'{histnet_path}'. Train HistNet first, then regenerate "
+                "the CommNet observations.")
+
+
 def generate_observation_data(cohort:str,roster:list[str],
                               networks:list[str]|None=None,
                               subsample:float=1.0,
@@ -60,6 +78,11 @@ def generate_observation_data(cohort:str,roster:list[str],
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     cohort_path = os.path.join(workspace_path,"cohorts",cohort)
     rollout_folder_path = os.path.join(cohort_path,"rollout_data")
+
+    # CommNet consumes HistNet's deployed feature vector. Validate every
+    # student up front so generation cannot silently use a random HistNet or
+    # leave the roster with a partially refreshed observation dataset.
+    _require_commnet_prerequisites(cohort_path,roster,networks)
 
     # Extract some useful diagnostics info
     courses = [folder for folder in os.listdir(rollout_folder_path)]

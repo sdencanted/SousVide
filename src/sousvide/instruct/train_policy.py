@@ -16,6 +16,7 @@ from rich.progress import Progress
 from torch.utils.data import DataLoader
 from typing import Literal
 
+from sousvide.control.artifact_paths import get_losses_path
 from sousvide.control.networks.base_net import BaseNet
 from sousvide.control.pilot import Pilot
 from sousvide.control.policy import Policy
@@ -442,7 +443,8 @@ def train_student(cohort_name:str,student_name:str,network_name:str,Neps:int,
     training_network = _compile_network(network,compile_mode)
     student_path = student.path
     network_path = student.policy.network_paths[network_name]
-    losses_path = os.path.join(student_path,"losses_"+network_name+".pt")
+    losses_path = get_losses_path(
+        student_path,network_name,image_modality)
     artifact_name = (
         f"{network_name}_{image_modality}"
         if network_name == "commNet" else network_name)

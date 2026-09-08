@@ -18,3 +18,4 @@ build/
 
 *.mp4
 cohorts
+notebooks/*.png

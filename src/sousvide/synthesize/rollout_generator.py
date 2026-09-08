@@ -540,13 +540,13 @@ def _generate_rollouts_impl(
 
         rollout_id = str(idx_set+1).zfill(3)+str(idx).zfill(3)
 
-        # Event rollouts begin one RGB interval early and render every
-        # simulation step through the final saved RGB frame.
+        # Event rollouts use a render-only pre-roll for one control interval,
+        # then render every simulation step through the final saved RGB frame.
         recorder = None
         event_buffer = None
         if generate_events:
             hz_sim = simulator.conFiG["rollout"]["frequency"]
-            warmup_steps = int(hz_sim/controller.hz)
+            pre_roll_steps = int(hz_sim/controller.hz)
             expected_windows = int(np.round(dt_ro*controller.hz))
             staged_h5 = os.path.join(event_staging_dir,rollout_id+".h5")
             output_paths = {
@@ -566,7 +566,7 @@ def _generate_rollouts_impl(
                 event_callback = recorder.process_frame
             try:
                 Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol = simulator.simulate_with_events(
-                    controller,t0,tf,x0,event_callback,warmup_steps)
+                    controller,t0,tf,x0,event_callback,pre_roll_steps)
                 if recorder is not None:
                     generated_event_images = recorder.close_all()
             except Exception:

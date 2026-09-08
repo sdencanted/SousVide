@@ -366,11 +366,6 @@ def deploy_roster(cohort_name:str,
         else Simulator(gsplat,method)
     )
     simulator.update_forces(course["forces"])
-    warmup_controller = (
-        VehicleRateMPC(expert,expert_course)
-        if is_event_modality(image_modality)
-        else None
-    )
     camera_config = bframe.get("camera",{})
     event_sensor_shape = (
         int(camera_config.get("height",224)),
@@ -385,18 +380,17 @@ def deploy_roster(cohort_name:str,
     for pilot in crew:
         # Load Pilot
         if pilot == "expert":
-            controller = warmup_controller or VehicleRateMPC(expert,expert_course)
+            controller = VehicleRateMPC(expert,expert_course)
         else:
             controller = Pilot(
                 cohort_name,pilot,image_modality=image_modality,
                 event_cloud_options=resolved_cloud_options,
                 require_commnet_weights=require_commnet_weights)
             controller.set_mode('deploy')
-        base_controller = controller
         controller_modality = "rgb" if pilot == "expert" else image_modality
         if debug_view is not None and pilot != "expert":
             controller = _DebugPolicyController(
-                base_controller,pilot,controller_modality,debug_view)
+                controller,pilot,controller_modality,debug_view)
 
         # Simulate trajectory across samples
         trajectories = []
@@ -411,9 +405,6 @@ def deploy_roster(cohort_name:str,
             # Update pilot
             controller.reset_memory(x0)
             controller.update_frame(frame)
-            if warmup_controller is not None and warmup_controller is not base_controller:
-                warmup_controller.reset_memory(x0)
-                warmup_controller.update_frame(frame)
 
             # Simulate Trajectory
             if is_event_modality(image_modality):
@@ -436,9 +427,8 @@ def deploy_roster(cohort_name:str,
                 try:
                     Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol = simulator.simulate_with_events(
                         controller,t0,tf,x0,callback,
-                        warmup_steps=int(
+                        pre_roll_steps=int(
                             simulator.conFiG["rollout"]["frequency"]/controller.hz),
-                        warmup_policy=warmup_controller,
                         image_modality=controller_modality)
                     if online_events is not None:
                         online_events.close()

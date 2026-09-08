@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+from figs.simulator import Simulator
 
 from sousvide.synthesize.event_generator import (
     V2ERolloutRecorder,
@@ -407,7 +408,7 @@ class EventImageTests(unittest.TestCase):
 
 
 class EventSimulatorTests(unittest.TestCase):
-    def test_warmup_is_one_control_interval_and_saved_lengths_are_unchanged(self):
+    def test_preroll_is_one_control_interval_and_saved_lengths_are_unchanged(self):
         simulator = EventSimulator.__new__(EventSimulator)
         simulator.conFiG = {
             "rollout": {
@@ -483,7 +484,7 @@ class EventSimulatorTests(unittest.TestCase):
             result = simulator.simulate_with_events(
                 Policy(), 1.0, 1.1, np.zeros(10),
                 lambda rgb, timestamp, close: callbacks.append((timestamp, close)),
-                warmup_steps=5,
+                pre_roll_steps=5,
             )
 
         tro, xro, uro, _, rgb, _, _ = result
@@ -491,9 +492,103 @@ class EventSimulatorTests(unittest.TestCase):
         self.assertEqual(len(xro), 3)
         self.assertEqual(len(uro), 2)
         self.assertEqual(len(rgb), 2)
-        self.assertEqual(xro[0, 0], 5)
+        self.assertEqual(xro[0, 0], 0)
         self.assertEqual(len(callbacks), 11)
         self.assertEqual([t for t, close in callbacks if close], [0.05, 0.1])
+
+    def test_event_rgb_rollout_matches_non_event_state_and_commands(self):
+        simulator = EventSimulator.__new__(EventSimulator)
+        simulator.conFiG = {
+            "rollout": {
+                "frequency":100,
+                "noise":{
+                    "model":{"mean":[0.0]*10,"std":[0.01]*10},
+                    "sensor":{"mean":[0.0]*10,"std":[0.02]*10},
+                },
+            },
+            "frame":{},
+            "forces":{},
+        }
+
+        class Solver:
+            def simulate(self,x,u,p):
+                result = x.copy()
+                result[0:3] += x[3:6] / 100
+                result[3] += u[1] / 100
+                return result
+
+        class GSplat:
+            def generate_output_camera(self,camera):
+                return object()
+
+            def render_rgb(self,camera,transform):
+                return (
+                    np.full((2,3,3),17,dtype=np.uint8),
+                    np.full((2,3,1),23,dtype=np.uint8),
+                )
+
+        class Forces:
+            def __init__(self,config):
+                pass
+
+            def get_forces(self,state,noisy=True):
+                return np.array([state[0]*0.1,0.0,0.0])
+
+        class Policy:
+            hz = 20
+
+            def __init__(self):
+                self.inputs = []
+
+            def control(self,t,x,u,rgb,depth,wrench):
+                self.inputs.append((t,x.copy(),u.copy()))
+                command = np.array([
+                    u[0],0.1*x[0],-0.1*x[1],0.05*x[2]])
+                return command,{"solve":0.001}
+
+        specification = {
+            "nx":10,"nu":4,"m":1.0,"kt":1.0,"g":9.81,"Nrtr":4,
+            "Tc2b":np.eye(4),"rgb_dim":(2,3,3),"dpt_dim":(2,3,1),
+            "camera":{},
+        }
+        simulator.solver = Solver()
+        simulator.gsplat = GSplat()
+        x0 = np.array([
+            1.0,2.0,-1.0,0.2,-0.1,0.05,0.0,0.0,0.0,1.0])
+        base_policy = Policy()
+        event_policy = Policy()
+
+        with (
+            mock.patch(
+                "sousvide.synthesize.event_simulator.qs.generate_specifications",
+                return_value=specification),
+            mock.patch(
+                "sousvide.synthesize.event_simulator.ExternalForces",Forces),
+            mock.patch("figs.simulator.ExternalForces",Forces),
+            mock.patch(
+                "sousvide.synthesize.event_simulator.th.x_to_T",
+                return_value=np.eye(4)),
+            mock.patch(
+                "sousvide.synthesize.event_simulator.oh.obedient_quaternion",
+                side_effect=lambda current,previous:current),
+        ):
+            np.random.seed(37)
+            base_result = Simulator.simulate(
+                simulator,base_policy,1.0,1.1,x0)
+            np.random.seed(37)
+            event_result = simulator.simulate_with_events(
+                event_policy,1.0,1.1,x0,
+                lambda rgb,timestamp,close:None,pre_roll_steps=5,
+                image_modality="rgb")
+
+        for base_array,event_array in zip(base_result,event_result):
+            np.testing.assert_array_equal(base_array,event_array)
+        self.assertEqual(len(base_policy.inputs),len(event_policy.inputs))
+        for base_input,event_input in zip(
+                base_policy.inputs,event_policy.inputs):
+            self.assertEqual(base_input[0],event_input[0])
+            np.testing.assert_array_equal(base_input[1],event_input[1])
+            np.testing.assert_array_equal(base_input[2],event_input[2])
 
 
 if __name__ == "__main__":

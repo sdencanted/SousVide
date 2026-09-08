@@ -6,12 +6,55 @@ from unittest import mock
 import torch
 from torch import nn
 
+from sousvide.control.artifact_paths import get_losses_path
 import sousvide.control.network_factory as network_factory
 import sousvide.control.network_helper as network_helper
+import sousvide.synthesize.observation_generator as observation_generator
 from sousvide.control.policy import Policy
 
 
 class ModalityNetworkWeightTests(unittest.TestCase):
+    def test_commnet_loss_paths_are_separate_by_modality(self):
+        pilot_path = "/cohort/roster/Maverick"
+
+        self.assertEqual(
+            get_losses_path(pilot_path,"commNet","rgb"),
+            os.path.join(pilot_path,"losses_commNet_rgb.pt"))
+        self.assertEqual(
+            get_losses_path(pilot_path,"commNet","event_cloud"),
+            os.path.join(pilot_path,"losses_commNet_event_cloud.pt"))
+        self.assertEqual(
+            get_losses_path(pilot_path,"histNet","rgb"),
+            os.path.join(pilot_path,"losses_histNet.pt"))
+
+    def test_commnet_observations_require_trained_histnet_weights(self):
+        with tempfile.TemporaryDirectory() as cohort_path:
+            with self.assertRaisesRegex(
+                    FileNotFoundError,
+                    "Train HistNet first"):
+                observation_generator._require_commnet_prerequisites(
+                    cohort_path,["Maverick"],["commNet"])
+
+    def test_histnet_observations_do_not_require_existing_weights(self):
+        with tempfile.TemporaryDirectory() as cohort_path:
+            observation_generator._require_commnet_prerequisites(
+                cohort_path,["Maverick"],["histNet"])
+
+    def test_full_policy_observations_require_trained_histnet_weights(self):
+        with tempfile.TemporaryDirectory() as cohort_path:
+            with self.assertRaises(FileNotFoundError):
+                observation_generator._require_commnet_prerequisites(
+                    cohort_path,["Maverick"],None)
+
+    def test_commnet_observations_accept_existing_histnet_weights(self):
+        with tempfile.TemporaryDirectory() as cohort_path:
+            pilot_path = os.path.join(cohort_path,"roster","Maverick")
+            os.makedirs(pilot_path)
+            open(os.path.join(pilot_path,"histNet.pt"),"wb").close()
+
+            observation_generator._require_commnet_prerequisites(
+                cohort_path,["Maverick"],["commNet"])
+
     def test_collect_prediction_inputs_skips_final_target_forward(self):
         class HistoryNetwork(nn.Module):
             def __init__(self):
