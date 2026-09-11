@@ -128,7 +128,8 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         patches = self._patch_dynamics()
         with patches[0],patches[1],patches[2],patches[3]:
             simulator.simulate_with_events(
-                student,1.0,1.1,np.zeros(10),event_callback,5,
+                student,1.0,1.1,np.array([0.0]*9+[1.0]),event_callback,5,
+                x_prev=np.array([0.0]*9+[1.0]),
                 image_modality="kronecker_delta")
 
         self.assertEqual(len(student.source_images),2)
@@ -213,6 +214,11 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 side_effect=lambda current,previous:current),
         )
 
+    def test_event_preroll_requires_predecessor(self):
+        with self.assertRaisesRegex(ValueError,"requires x_prev"):
+            self._simulator().simulate_with_events(
+                RecordingPolicy(),0.0,0.1,np.zeros(10),lambda *args:None,5)
+
     def test_preroll_does_not_control_or_advance_the_recorded_state(self):
         simulator = self._simulator()
         student = RecordingPolicy()
@@ -227,7 +233,8 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         patches = self._patch_dynamics()
         with patches[0],patches[1],patches[2],patches[3]:
             result = simulator.simulate_with_events(
-                student,1.0,1.1,np.zeros(10),event_callback,5,
+                student,1.0,1.1,np.array([0.0]*9+[1.0]),event_callback,5,
+                x_prev=np.array([0.0]*9+[1.0]),
                 image_modality="kronecker_delta")
 
         _,xro,uro,_,rgb,_,_ = result
@@ -241,7 +248,7 @@ class OnlineEventDeploymentTests(unittest.TestCase):
             [timestamp for timestamp,close in callbacks if close],
             [0.05,0.1])
 
-    def test_preroll_ascends_at_half_a_meter_per_second_into_x0(self):
+    def test_preroll_interpolates_preceding_position_and_orientation(self):
         simulator = self._simulator()
         policy = RecordingPolicy()
         rendered_states = []
@@ -249,6 +256,10 @@ class OnlineEventDeploymentTests(unittest.TestCase):
         callbacks = []
         x0 = np.array([
             1.0,2.0,-1.0,0.1,0.2,0.3,0.0,0.0,0.0,1.0])
+
+        x_prev = x0.copy()
+        x_prev[:3] -= [0.5,0.3,0.1]
+        x_prev[6:10] = [0.0,0.0,np.sin(np.pi/4),np.cos(np.pi/4)]
 
         def record_transform(state):
             rendered_states.append(state.copy())
@@ -265,10 +276,14 @@ class OnlineEventDeploymentTests(unittest.TestCase):
                 policy,1.0,1.1,x0,
                 lambda rgb,timestamp,close:callbacks.append(
                     (timestamp,close)),
-                pre_roll_steps=5,image_modality="rgb")
+                pre_roll_steps=5,image_modality="rgb",x_prev=x_prev)
 
         expected = np.repeat(x0[None,:],5,axis=0)
-        expected[:,2] += np.array([0.025,0.020,0.015,0.010,0.005])
+        fractions = np.arange(5)/5
+        expected[:,:3] = (1-fractions[:,None])*x_prev[:3] + fractions[:,None]*x0[:3]
+        angles = (1-fractions)*np.pi/4
+        expected[:,8] = np.sin(angles)
+        expected[:,9] = np.cos(angles)
         np.testing.assert_allclose(rendered_states[:5],expected)
         np.testing.assert_array_equal(rendered_states[5],x0)
         np.testing.assert_array_equal(x0,np.array([
@@ -297,7 +312,8 @@ class OnlineEventDeploymentTests(unittest.TestCase):
             patches = self._patch_dynamics()
             with patches[0],patches[1],patches[2],patches[3]:
                 simulator.simulate_with_events(
-                    student,1.0,1.1,np.zeros(10),event_callback,5,
+                    student,1.0,1.1,np.array([0.0]*9+[1.0]),event_callback,5,
+                    x_prev=np.array([0.0]*9+[1.0]),
                     image_modality=modality)
 
             self.assertEqual(len(student.images),2)

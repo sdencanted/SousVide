@@ -348,7 +348,8 @@ def deploy_roster(cohort_name:str,
         Tsp_bt, bframe, method["randomization"]["parameters"]
     )
     Perturbations = sh.generate_perturbations(
-        Tsp_bt, tXUd, method["randomization"]["initial"]
+        Tsp_bt, tXUd, method["randomization"]["initial"],
+        include_previous=is_event_modality(image_modality)
     )
 
     # Initialize the rich variables
@@ -429,7 +430,8 @@ def deploy_roster(cohort_name:str,
                         controller,t0,tf,x0,callback,
                         pre_roll_steps=int(
                             simulator.conFiG["rollout"]["frequency"]/controller.hz),
-                        image_modality=controller_modality)
+                        image_modality=controller_modality,
+                        x_prev=perturbation["x_prev"])
                     if online_events is not None:
                         online_events.close()
                 except Exception as e:

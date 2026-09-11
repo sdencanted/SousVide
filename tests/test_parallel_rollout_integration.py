@@ -19,8 +19,9 @@ class FakeEventSimulator:
         self.frame = frame
 
     def simulate_with_events(
-        self,controller,t0,tf,x0,event_callback,pre_roll_steps
+        self,controller,t0,tf,x0,event_callback,pre_roll_steps,*,x_prev
     ):
+        np.testing.assert_array_equal(x_prev,np.ones(10))
         dark = np.zeros((8,8,3),dtype=np.uint8)
         bright = np.full((8,8,3),255,dtype=np.uint8)
         event_callback(dark,0.0,False)
@@ -195,8 +196,8 @@ class ParallelRolloutIntegrationTests(unittest.TestCase):
         return (
             [{"index":0},{"index":1}],
             [
-                {"t0":0.0,"x0":np.zeros(10)},
-                {"t0":0.1,"x0":np.zeros(10)},
+                {"t0":0.0,"x0":np.zeros(10),"x_prev":np.ones(10)},
+                {"t0":0.1,"x0":np.zeros(10),"x_prev":np.ones(10)},
             ],
             np.zeros((1,15)),
         )

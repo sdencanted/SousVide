@@ -482,9 +482,9 @@ class EventSimulatorTests(unittest.TestCase):
             ),
         ):
             result = simulator.simulate_with_events(
-                Policy(), 1.0, 1.1, np.zeros(10),
+                Policy(), 1.0, 1.1, np.array([0.0]*9+[1.0]),
                 lambda rgb, timestamp, close: callbacks.append((timestamp, close)),
-                pre_roll_steps=5,
+                pre_roll_steps=5,x_prev=np.array([0.0]*9+[1.0]),
             )
 
         tro, xro, uro, _, rgb, _, _ = result
@@ -579,7 +579,7 @@ class EventSimulatorTests(unittest.TestCase):
             event_result = simulator.simulate_with_events(
                 event_policy,1.0,1.1,x0,
                 lambda rgb,timestamp,close:None,pre_roll_steps=5,
-                image_modality="rgb")
+                image_modality="rgb",x_prev=x0.copy())
 
         for base_array,event_array in zip(base_result,event_result):
             np.testing.assert_array_equal(base_array,event_array)

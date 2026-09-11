@@ -191,7 +191,8 @@ def generate_rollout_data(cohort_name:str,course_names:list[str],
                     Tsp_bt, bframe, method["randomization"]["parameters"]
                 )
                 Perturbations = sh.generate_perturbations(
-                    Tsp_bt, tXUd, method["randomization"]["initial"]
+                    Tsp_bt, tXUd, method["randomization"]["initial"],
+                    include_previous=event_enabled
                 )
 
                 # Update the samples progress bar config
@@ -566,7 +567,8 @@ def _generate_rollouts_impl(
                 event_callback = recorder.process_frame
             try:
                 Tro,Xro,Uro,Wro,Rgb,Dpt,Tsol = simulator.simulate_with_events(
-                    controller,t0,tf,x0,event_callback,pre_roll_steps)
+                    controller,t0,tf,x0,event_callback,pre_roll_steps,
+                    x_prev=perturbation["x_prev"])
                 if recorder is not None:
                     generated_event_images = recorder.close_all()
             except Exception:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.spatial.transform import Rotation, Slerp
 
 import figs.dynamics.quadcopter_specifications as qs
 import figs.utilities.orientation_helper as oh
@@ -24,12 +25,18 @@ class EventSimulator(Simulator):
     selected for event-enabled rollout generation and online deployment.
     """
 
-    PRE_ROLL_ASCENT_SPEED_MPS = 0.5
-
     def simulate_with_events(
         self,policy,t0,tf,x0,event_frame_callback,pre_roll_steps,
-        image_modality:VisualModality="rgb",
+        image_modality:VisualModality="rgb",*,x_prev:np.ndarray|None=None,
     ):
+        """Simulate from x0 with a hidden, render-only trajectory pre-roll.
+
+        When a callback is supplied, x_prev is required and its pose is
+        interpolated into x0 over one control interval. Event timestamps start
+        at zero; saved trajectory timestamps still start at t0.
+        """
+        if event_frame_callback is not None and x_prev is None:
+            raise ValueError("Event generation requires x_prev for trajectory pre-roll.")
         nw = 6
         rollout = self.conFiG["rollout"]
         spec = qs.generate_specifications(self.conFiG["frame"])
@@ -85,16 +92,16 @@ class EventSimulator(Simulator):
         ucr = np.array([-(m * g) / (nrtr * kt), 0.0, 0.0, 0.0])
         tau_cr = np.zeros(3)
 
-        # Render a kinematic ascent into x0 to seed the first event window.
-        # FiGS uses positive world z downward, so a pose below x0 has a larger
-        # z coordinate. Nothing in the live simulation or controller is
-        # advanced during this pre-roll.
+        # Render the preceding trajectory pose into x0 over one control interval.
+        # This hidden transition does not advance physics or the controller.
         if event_frame_callback is not None:
+            orientations = Slerp(
+                [0.0,1.0],Rotation.from_quat([x_prev[6:10],x0[6:10]]))
             for i in range(pre_roll_steps):
+                fraction = i / pre_roll_steps
                 pre_roll_state = x0.copy()
-                time_to_start = (pre_roll_steps - i) / hz_sim
-                pre_roll_state[2] += (
-                    self.PRE_ROLL_ASCENT_SPEED_MPS * time_to_start)
+                pre_roll_state[:3] = (1-fraction)*x_prev[:3] + fraction*x0[:3]
+                pre_roll_state[6:10] = orientations(fraction).as_quat()
                 tb2w = th.x_to_T(pre_roll_state)
                 rgb,_ = self.gsplat.render_rgb(camera,tb2w @ tc2b)
                 event_frame_callback(rgb,i/hz_sim,False)
