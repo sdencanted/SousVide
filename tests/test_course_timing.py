@@ -234,6 +234,10 @@ class EditorTimingTests(unittest.TestCase):
         editor = self.make_editor()
         self.set_mode(editor, "manual")
         editor._add_keypoint()
+        self.assertEqual(list(editor.keyframes), ["fo0", "fo2", "fo1"])
+        self.assertEqual(editor.selection, "fo2")
+        self.assertEqual(editor.selected_gui.options, ("fo0", "fo2", "fo1"))
+        self.assertIs(editor.course["waypoints"]["keyframes"], editor.keyframes)
         self.assertTrue(np.all(np.diff(manual_times(editor.keyframes)) > 0))
 
     def test_mode_switch_restores_manual_times_and_invalid_settings_restore_controls(self):
