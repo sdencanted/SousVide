@@ -14,6 +14,7 @@ from figs.tsplines.min_time_snap import MinTimeSnap
 from figs.utilities import transform_helper as th
 from figs.utilities.course_editor import CourseEditor, _new_course, _normalise_course
 from figs.utilities.course_timing import estimate_times, manual_times, timing_settings, TIMING_MODES
+from figs.utilities.trajectory_diagnostics import TrajectoryTimingError
 
 
 def sample_course():
@@ -115,6 +116,42 @@ class SolverTimingTests(unittest.TestCase):
         with mock.patch("figs.tsplines.min_time_snap.minimize", return_value=SimpleNamespace(success=False, message="iteration limit")):
             with self.assertRaisesRegex(ValueError, "iteration limit"):
                 MinTimeSnap(sample_course()["waypoints"], 20, 10.0)
+
+    def test_failure_captures_actual_durations_constraints_and_costs(self):
+        waypoints = sample_course()["waypoints"]
+        waypoints["keyframes"]["fo1"]["fo"][3][0] = 4.0
+        initial = estimate_times(waypoints["keyframes"], waypoints["timing"])
+        failure = SimpleNamespace(success=False, message="Inequality constraints incompatible &#x20;", x=np.array([0.01]))
+        with mock.patch("figs.tsplines.min_time_snap.minimize", return_value=failure):
+            with self.assertRaises(TrajectoryTimingError) as caught:
+                MinTimeSnap(waypoints, 20, 10.0)
+        diagnostic = caught.exception
+        segment = diagnostic.segments[0]
+        self.assertEqual(segment["start"], "fo0")
+        self.assertEqual(segment["end"], "fo1")
+        self.assertEqual(segment["initial_dt"], initial[-1])
+        self.assertEqual(segment["last_dt"], 0.01)
+        self.assertEqual(segment["distance"], 3.0)
+        self.assertEqual(segment["yaw_change"], 4.0)
+        self.assertGreater(segment["cost"], 0)
+        self.assertIn("at lower time bound", segment["notes"])
+        self.assertIn("yaw change exceeds π", diagnostic.markdown())
+        self.assertIn("suspects, not confirmed causes", diagnostic.markdown())
+        self.assertIn("[4.0, 0.0, 0.0, null]", diagnostic.markdown())
+        self.assertNotIn("&#x20;", str(diagnostic))
+        waypoints["keyframes"]["fo1"]["fo"][0][0] = 999.0
+        self.assertEqual(diagnostic.keyframes["fo1"]["fo"][0][0], 3.0)
+
+    def test_failure_diagnostics_survive_nonfinite_iterate_and_cost_failure(self):
+        failure = SimpleNamespace(success=False, message="Inequality constraints incompatible", x=np.array([np.nan]))
+        with mock.patch("figs.tsplines.min_time_snap.minimize", return_value=failure), mock.patch.object(MinTimeSnap, "solve_uqp", side_effect=RuntimeError("singular matrix")):
+            with self.assertRaises(TrajectoryTimingError) as caught:
+                MinTimeSnap(sample_course()["waypoints"], 20, 10.0)
+        diagnostic = caught.exception
+        self.assertIn("invalid last duration", diagnostic.segments[0]["notes"])
+        self.assertIsNone(diagnostic.segments[0]["cost"])
+        self.assertIn("singular matrix", diagnostic.markdown())
+        self.assertIn("No segment cost ranking", diagnostic.markdown())
 
 
 class EditorTimingTests(unittest.TestCase):
@@ -275,6 +312,51 @@ class EditorTimingTests(unittest.TestCase):
             editor._solve_timing()
         self.assertIsNone(editor.optimized_times)
         self.assertIn("Course changed during the solve", editor.status.content)
+
+    def make_failure(self, editor):
+        frames = editor.keyframes
+        initial = np.diff([frame["t"] for frame in frames.values()])
+        return TrajectoryTimingError("Inequality constraints incompatible &#x20;", frames, initial,
+                                     np.full(len(initial), 0.01), (0.01, 30.0), costs=np.ones(len(initial)))
+
+    def test_solve_failure_shows_values_and_selects_keypoint_then_clears_on_edit(self):
+        editor = self.make_editor()
+        failure = self.make_failure(editor)
+        with mock.patch("figs.tsplines.min_time_snap.MinTimeSnap", side_effect=failure):
+            editor._solve_timing()
+        self.assertTrue(editor.diagnostics_folder.visible)
+        self.assertIn("[3.0, 0.0, 0.0, null]", editor.diagnostics_gui.content)
+        self.assertNotIn("&#x20;", editor.status.content)
+        editor.diagnostic_keypoint_gui.value = "fo1"
+        editor._inspect_failure_keypoint()
+        self.assertEqual(editor.selection, "fo1")
+        self.assertTrue(editor.diagnostics_folder.visible)
+        editor._course_changed()
+        self.assertFalse(editor.diagnostics_folder.visible)
+        self.assertEqual(editor.diagnostics_gui.content, "")
+        self.assertTrue(editor.inspect_keypoint_button.disabled)
+
+    def test_simulation_failure_uses_same_diagnostics(self):
+        editor = self.make_editor()
+        editor.gsplat = object()
+        failure = self.make_failure(editor)
+        with mock.patch.dict("sys.modules", {
+            "figs.control.vehicle_rate_mpc": SimpleNamespace(VehicleRateMPC=mock.Mock(side_effect=failure)),
+            "figs.simulator": SimpleNamespace(Simulator=mock.MagicMock()),
+        }):
+            editor._run_simulation()
+        self.assertIn("Simulation failed", editor.status.content)
+        self.assertEqual(editor.diagnostics_gui.content, failure.markdown())
+        self.assertFalse(editor.simulate_button.disabled)
+
+    def test_failed_old_solve_does_not_diagnose_new_course(self):
+        editor = self.make_editor()
+        failure = self.make_failure(editor)
+        revision = editor._revision
+        editor._course_changed()
+        editor._show_failure("Simulation", failure, revision)
+        self.assertFalse(editor.diagnostics_folder.visible)
+        self.assertIn("Course changed", editor.status.content)
 
 
 if __name__ == "__main__":
