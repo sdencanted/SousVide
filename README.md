@@ -4,8 +4,28 @@
 1) Clone repository and load the submodules.
 ```
 git clone https://github.com/StanfordMSL/SousVide.git
-git submodule update --recursive --init
+cd SousVide
+bash scripts/setup_submodule_branches.sh
 ```
+
+The script initializes nested submodules and recreates the active development
+branches at the pinned commits: SousVide `main`, FiGS `2main` tracking
+`origin/main`, acados `master`, nerfstudio `main`, and v2e `master`.
+The other branches track the same name on `origin`; deeper dependencies remain
+detached. Run it on a fresh or clean clone.
+
+It configures local submodule updates to merge into these branches and sets
+`push.default=upstream` in these five repositories, so plain `git push` from
+FiGS's `2main` targets `origin/main`. Updates may require conflict resolution.
+It does not pull the latest branch tips. A clone's default branch may be moved
+from its remote tip to the pinned commit; existing branches with local commits
+are not reset, and conflicting branch positions cause the script to stop. Explicit
+`git submodule update --checkout` can detach branches again.
+
+Commit and push changes inside each submodule first, then commit and push its
+updated pointer in the parent (for example, acados, then FiGS, then SousVide).
+Pushing requires write access to the corresponding remote.
+
 2) Build ACADOS locally.
 ```
 # Navigate to acados folder
